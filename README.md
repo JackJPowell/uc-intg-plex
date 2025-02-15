@@ -27,10 +27,12 @@ The simpliest way to get started is by uploading this integration to your unfold
 ```docker run -d --name=uc-intg-plex -p 9090:9090 --restart unless-stopped ghcr.io/jackjpowell/uc-intg-plex:latest```
 
 ### Docker Compose
-```services:
-     uc-intg-plex:
-       image: ghcr.io/jackjpowell/uc-intg-plex:latest
-       container_name: uc-intg-plex
-       ports:
-         - 9090:9090
-       restart: unless-stopped```
+```
+services:
+  uc-intg-plex:
+    image: ghcr.io/jackjpowell/uc-intg-plex:latest
+    container_name: uc-intg-plex
+    ports:
+      - 9090:9090
+    restart: unless-stopped
+```
