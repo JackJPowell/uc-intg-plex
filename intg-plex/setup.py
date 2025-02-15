@@ -58,17 +58,17 @@ _user_input_manual = RequestUserInput(
             },
         },
         {
-            "field": {"text": {"value": "192.168.1.207"}},
+            "field": {"text": {"value": ""}},
             "id": "address",
             "label": {"en": "Host Address", "de": "IP-Adresse", "fr": "Adresse IP"},
         },
         {
-            "field": {"text": {"value": "32400"}},
+            "field": {"text": {"value": ""}},
             "id": "port",
             "label": {"en": "HTTP port", "fr": "Port HTTP"},
         },
         {
-            "field": {"text": {"value": "AFLyz9hdESi18szyA7_s"}},
+            "field": {"text": {"value": ""}},
             "id": "token",
             "label": {"en": "Auth Token"},
         },
