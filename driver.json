@@ -1,0 +1,39 @@
+{
+	"driver_id": "plex_driver",
+	"version": "0.1.0",
+	"min_core_api": "0.20.0",
+	"name": { "en": "Plex" },
+	"icon": "uc:display",
+	"description": {
+		"en": "Control your Plex clients directly from your Remote"
+	},
+	"developer": {
+		"name": "Jack Powell",
+		"email": "jackjpowell@gmail.com",
+		"url": "https://github.com/jackjpowell"
+	},
+	"home_page": "https://github.com/JackJPowell/uc-intg-plex",
+	"setup_data_schema": {
+		"title": {
+		"en": "Plex Integration setup",
+		"de": "Integrations setup",
+		"fr": "Configuration de l'intégration"
+		},
+		"settings": [
+		{
+			"id": "info",
+			"label": {
+			"en": "Follow the setup process to add Plex Clients to your Unfolded Circle Remote"
+			},
+			"field": {
+			"label": {
+				"value": {
+				"en": "The integration will let you control Plex clients on your network."
+				}
+			}
+			}
+		}
+		]
+	},
+	"release_date": "2025-02-15"
+}
