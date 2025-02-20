@@ -6,11 +6,15 @@ This module implements Plex communication of the Remote Two integration driver.
 
 import asyncio
 import logging
+import io
+from PIL import Image
+from io import BytesIO
+from urllib.request import urlopen
+import base64
 from asyncio import AbstractEventLoop, Future, Lock, shield
 from enum import IntEnum
 from typing import Any, ParamSpec, TypeVar
 
-from aiohttp import ClientSession
 from config import PlexConfigDevice
 from const import PLEX_FEATURES
 from plexapi.base import MediaContainer
@@ -21,6 +25,7 @@ from pyee.asyncio import AsyncIOEventEmitter
 from ucapi.media_player import Attributes as MediaAttr
 from ucapi.media_player import Features, MediaType
 from ucapi.media_player import States as MediaStates
+
 
 _PlexDeviceT = TypeVar("_PlexDeviceT", bound="PlexDevice")
 _P = ParamSpec("_P")
@@ -62,6 +67,7 @@ PLEX_STATE_MAPPING = {
     States.PLAYING: MediaStates.PLAYING,
     States.PAUSED: MediaStates.PAUSED,
     States.IDLE: MediaStates.ON,
+    States.UNAVAILABLE: MediaStates.STANDBY,
 }
 
 
@@ -79,7 +85,6 @@ class PlexDevice:
         self._name: str = device_config.name
         self.event_loop = loop or asyncio.get_running_loop()
         self.events = AsyncIOEventEmitter(self.event_loop)
-        self._http_session: ClientSession | None = None
 
         self._plex_connection: PlexWebsocket | None = None
         self._plex: PlexServer | None = None
@@ -87,7 +92,8 @@ class PlexDevice:
         self._play_state = None
         self._key = None
         self._view_offset = None
-        self._attr_state = States.OFF
+        self._attr_state = "OFF"
+        self._previous_state = "OFF"
         self._players: list[Any, Any] = None
         self._session: MediaContainer = None
         self._client: PlexClient = None
@@ -103,6 +109,7 @@ class PlexDevice:
         self._media_image_url = ""
         self._media_artist = ""
         self._media_album = ""
+        self._image_cache = None
 
         self._websocket_task = None
         self._connect_lock = Lock()
@@ -112,7 +119,6 @@ class PlexDevice:
         self.event_loop.create_task(self.init_connection())
 
         self._connection_status: Future | None = None
-        self._previous_state = States.OFF
 
     async def init_connection(self):
         """Initialize connection to device."""
@@ -123,17 +129,8 @@ class PlexDevice:
                 pass
             finally:
                 self._plex_connection = None
-        if self._http_session:
-            try:
-                await self._http_session.close()
-            except Exception as ex:
-                _LOG.warning(
-                    "Error closing session to %s : %s", self._device_config.id, ex
-                )
-            self._session = None
-
-        self._http_session = ClientSession(raise_for_status=True)
-        self._http_session.loop.set_exception_handler(self.exception_handler)
+        
+        self.events.emit(Events.CONNECTING, self.id)
         self._plex = self.get_plex_server()
 
         self._plex_connection: PlexWebsocket = PlexWebsocket(
@@ -146,6 +143,7 @@ class PlexDevice:
         self._session = self.get_session_by_client_id(self.device_config.id)
         if self._session:
             self._client = self.get_plex_client()
+            self._attr_state = "ON"
 
         _LOG.debug(self._plex_connection.state)
 
@@ -168,12 +166,15 @@ class PlexDevice:
 
     def get_state(self) -> States:
         """Get state of device."""
-        if self._plex_is_off:
-            return States.OFF
-        if self._no_active_players:
-            return States.IDLE
         if self._play_state == 'paused':
             return States.PAUSED
+        if self._play_state == 'playing':
+            return States.PLAYING
+        if self.plex_is_off:
+            return "OFF"
+        if self._no_active_players:
+            return "IDLE"
+        
         return States.PLAYING
 
     async def _clear_connection(self, close=True):
@@ -265,6 +266,7 @@ class PlexDevice:
                 )
             if self._connection_status and not self._connection_status.done():
                 self._connection_status.set_result(True)
+
             return True
 
         except Exception as ex:
@@ -325,7 +327,8 @@ class PlexDevice:
         self._media_album = ""
         self._media_artist = ""
         self._media_image_url = ""
-        updated_data[MediaAttr.STATE] = States.OFF
+        self._image_cache = None
+        updated_data[MediaAttr.STATE] = "OFF"
         updated_data[MediaAttr.MEDIA_POSITION] = 0
         updated_data[MediaAttr.MEDIA_DURATION] = 0
         updated_data[MediaAttr.MEDIA_TITLE] = ""
@@ -350,15 +353,13 @@ class PlexDevice:
                         if payload and payload["state"] == "stopped":
                             updated_data = self._reset_media_state()
                         elif payload:
-                            if self._play_state != payload["state"]:
-                                self._play_state = payload["state"]
-                                updated_data[MediaAttr.STATE] = self._play_state
+                            self._play_state = payload["state"]
+                            updated_data[MediaAttr.STATE] = self._play_state
 
-                            if self._view_offset != payload["viewOffset"]:
-                                self._view_offset = payload["viewOffset"] / 1000
-                                updated_data[MediaAttr.MEDIA_POSITION] = (
-                                    self._view_offset
-                                )
+                            self._view_offset = payload["viewOffset"] / 1000
+                            updated_data[MediaAttr.MEDIA_POSITION] = (
+                                self._view_offset
+                            )
 
                             self._session = self.get_session_by_client_id(
                                 self.device_config.id
@@ -371,6 +372,9 @@ class PlexDevice:
                                     self._media_duration
                                 )
 
+                                if self._media_title != self._session.title:
+                                    self._image_cache = None
+
                                 self._media_title = self._session.title
                                 if self._session.type == "episode":
                                     self._media_artist = (
@@ -382,19 +386,46 @@ class PlexDevice:
                                 updated_data[MediaAttr.MEDIA_TITLE] = self._media_title
 
                                 if self._session.type == "episode":
-                                    self._media_image_url = self._session.artUrl
+                                    url = self._session.artUrl
                                 else:
-                                    self._media_image_url = self._session.posterUrl
+                                    url = self._session.posterUrl
+
+                                self._media_image_url = self.store_image_as_base64(url,800)
+                                
                                 updated_data[MediaAttr.MEDIA_IMAGE_URL] = (
                                     self._media_image_url
                                 )
-        if msgtype == "plexwebsocket_state":
-            match data:
-                case "stopped":
-                    updated_data = self._reset_media_state()
 
         if updated_data:
             self.events.emit(Events.UPDATE, self.id, updated_data)
+
+    def store_image_as_base64(self, url, max_size):
+        if not self._image_cache:
+            with urlopen(url) as url:
+                f = url.read()
+                image = Image.open(BytesIO(f))
+
+                width, height = image.size
+
+                if max_size >= max(width, height):
+                    return image
+
+                if width > height:
+                    new_width = max_size
+                    new_height = int(height * (max_size / width))
+                else:
+                    new_height = max_size
+                    new_width = int(width * (max_size / height))
+
+                resized_image = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
+
+                imgByteArr = io.BytesIO()
+                resized_image.save(imgByteArr, format="PNG")
+                imgByteArr = imgByteArr.getvalue()
+
+                image = base64.b64encode(imgByteArr).decode("ascii")
+                self._image_cache = f"data:image/png;base64,{image}"
+        return self._image_cache
 
     def get_players(self) -> list[Any, Any]:
         self._players = None
@@ -422,6 +453,7 @@ class PlexDevice:
                     identifier=self._session.player.machineIdentifier,
                     token=self._plex.createToken(),
                 )
+                self.events.emit(Events.CONNECTED, self.id)
                 return self._client
             except Exception:
                 pass
@@ -476,8 +508,8 @@ class PlexDevice:
         return self._device_config.id
 
     @property
-    def _plex_is_off(self):
-        return self._players is None
+    def plex_is_off(self):
+        return self._client is None
 
     @property
     def _no_active_players(self):

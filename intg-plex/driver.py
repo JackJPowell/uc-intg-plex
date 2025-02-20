@@ -33,7 +33,7 @@ async def on_r2_connect_cmd() -> None:
     _LOG.debug("R2 connect command: connecting device(s)")
     for device in _configured_clients.values():
         try:
-            await _LOOP.create_task(device.connect())
+            await _LOOP.create_task(connect_device(device))
         except RuntimeError as ex:
             _LOG.debug(
                 "Could not connect to device %s : %s", device.device_config.id, ex
@@ -81,10 +81,10 @@ async def connect_device(device: plex.PlexDevice):
             device_id = device_from_entity_id(entity_id)
             if device_id != device.id:
                 continue
-            if isinstance(entity, media_player.PlexMediaPlayer):
+            if entity["entity_type"] == 'media_player':
                 _LOG.debug("Sending attributes %s : %s", entity_id, device.attributes)
                 api.configured_entities.update_attributes(entity_id, device.attributes)
-            if isinstance(entity, remote.PlexRemote):
+            if entity["entity_type"] == remote.PlexRemote:
                 api.configured_entities.update_attributes(
                     entity_id,
                     {
