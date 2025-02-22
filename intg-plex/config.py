@@ -194,4 +194,5 @@ class Devices:
                 return dataclasses.replace(item)
         return None
 
+
 devices: Devices | None = None

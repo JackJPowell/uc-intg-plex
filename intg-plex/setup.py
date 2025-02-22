@@ -7,12 +7,12 @@ Setup flow for Plex integration.
 import logging
 import re
 from enum import IntEnum
+from urllib.parse import urlparse
 
 import config
 from config import PlexConfigDevice
 from plexapi.myplex import MyPlexAccount
 from plexapi.server import PlexServer
-from urllib.parse import urlparse
 from ucapi import (
     AbortDriverSetup,
     DriverSetupRequest,
@@ -371,12 +371,13 @@ async def _handle_server_config(
                 {
                     "id": "info",
                     "label": {
-                        "en": "Please select the Plex Client you would like to control. If it's not in the list, make sure the machine is on and the client is active.",
+                        "en": "Client Selection",
                     },
                     "field": {
                         "label": {
                             "value": {
-                                "en": "",
+                                "en": "Please select the Plex Client you would like to control.\n\n \
+                                If it's not in the list, make sure the machine is on and the client is active.",
                             }
                         }
                     },
@@ -464,7 +465,10 @@ async def _handle_client_selection(msg: UserDataResponse) -> SetupComplete | Set
     return SetupComplete()
 
 
-def get_server(server_name, username, password, auth_token, url="",port="") -> PlexServer:
+def get_server(
+    server_name, username, password, auth_token, url="", port=""
+) -> PlexServer:
+    """Get plex server."""
     address = f"{url}:{port}"
     try:
         if auth_token:
@@ -481,11 +485,13 @@ def get_server(server_name, username, password, auth_token, url="",port="") -> P
 
 
 def get_configured_device_ids() -> list:
+    """Get configuration IDs."""
     all_devices = config.devices.all()
     ids = []
     for device in all_devices:
         ids.append(device.id)
     return ids
+
 
 def validate_url(uri):
     """Validate passed in URL and attempts to correct api endpoint if path isn't supplied."""

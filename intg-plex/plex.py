@@ -5,18 +5,18 @@ This module implements Plex communication of the Remote Two integration driver.
 """
 
 import asyncio
-import logging
-import io
-from PIL import Image
-from io import BytesIO
-from urllib.request import urlopen
 import base64
+import io
+import logging
 from asyncio import AbstractEventLoop, Future, Lock, shield
 from enum import IntEnum
+from io import BytesIO
 from typing import Any, ParamSpec, TypeVar
+from urllib.request import urlopen
 
 from config import PlexConfigDevice
 from const import PLEX_FEATURES
+from PIL import Image
 from plexapi.base import MediaContainer
 from plexapi.myplex import MyPlexAccount
 from plexapi.server import PlexClient, PlexServer
@@ -25,7 +25,6 @@ from pyee.asyncio import AsyncIOEventEmitter
 from ucapi.media_player import Attributes as MediaAttr
 from ucapi.media_player import Features, MediaType
 from ucapi.media_player import States as MediaStates
-
 
 _PlexDeviceT = TypeVar("_PlexDeviceT", bound="PlexDevice")
 _P = ParamSpec("_P")
@@ -79,7 +78,7 @@ class PlexDevice:
         device_config: PlexConfigDevice,
         loop: AbstractEventLoop | None = None,
     ):
-        """Create instance with Plex client"""
+        """Create instance with Plex client."""
         self._device_config = device_config
         self.id: str = device_config.id
         self._name: str = device_config.name
@@ -129,7 +128,7 @@ class PlexDevice:
                 pass
             finally:
                 self._plex_connection = None
-        
+
         self.events.emit(Events.CONNECTING, self.id)
         self._plex = self.get_plex_server()
 
@@ -148,11 +147,11 @@ class PlexDevice:
         _LOG.debug(self._plex_connection.state)
 
     def get_plex_server(self) -> PlexServer:
+        """Get a reference to the PMS."""
         config = self._device_config
 
         url = f"{config.address}:{config.port}"
         try:
-            
             if config.auth_token:
                 self._plex = PlexServer(baseurl=url, token=config.auth_token, timeout=5)
             else:
@@ -166,16 +165,15 @@ class PlexDevice:
 
     def get_state(self) -> States:
         """Get state of device."""
-        if self._play_state == 'paused':
+        if self._play_state == "paused":
             return States.PAUSED
-        if self._play_state == 'playing':
+        if self._play_state == "playing":
             return States.PLAYING
         if self.plex_is_off:
-            return "OFF"
+            return States.OFF
         if self._no_active_players:
-            return "IDLE"
-        
-        return States.PLAYING
+            return States.IDLE
+        return States.ON
 
     async def _clear_connection(self, close=True):
         self._reset_state()
@@ -338,6 +336,7 @@ class PlexDevice:
         return updated_data
 
     def plex_ws_updates(self, msgtype, data, error) -> None:
+        """Handle WS Messages."""
         updated_data = {}
         payload = None
 
@@ -357,9 +356,7 @@ class PlexDevice:
                             updated_data[MediaAttr.STATE] = self._play_state
 
                             self._view_offset = payload["viewOffset"] / 1000
-                            updated_data[MediaAttr.MEDIA_POSITION] = (
-                                self._view_offset
-                            )
+                            updated_data[MediaAttr.MEDIA_POSITION] = self._view_offset
 
                             self._session = self.get_session_by_client_id(
                                 self.device_config.id
@@ -390,8 +387,10 @@ class PlexDevice:
                                 else:
                                     url = self._session.posterUrl
 
-                                self._media_image_url = self.store_image_as_base64(url,800)
-                                
+                                self._media_image_url = self.store_image_as_base64(
+                                    url, 800
+                                )
+
                                 updated_data[MediaAttr.MEDIA_IMAGE_URL] = (
                                     self._media_image_url
                                 )
@@ -400,6 +399,7 @@ class PlexDevice:
             self.events.emit(Events.UPDATE, self.id, updated_data)
 
     def store_image_as_base64(self, url, max_size):
+        """Retrieve and store image as base64 data."""
         if not self._image_cache:
             with urlopen(url) as url:
                 f = url.read()
@@ -417,7 +417,9 @@ class PlexDevice:
                     new_height = max_size
                     new_width = int(width * (max_size / height))
 
-                resized_image = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
+                resized_image = image.resize(
+                    (new_width, new_height), Image.Resampling.LANCZOS
+                )
 
                 imgByteArr = io.BytesIO()
                 resized_image.save(imgByteArr, format="PNG")
@@ -428,6 +430,7 @@ class PlexDevice:
         return self._image_cache
 
     def get_players(self) -> list[Any, Any]:
+        """Get active players from session."""
         self._players = None
         if self._plex:
             for session in self._plex.sessions():
@@ -436,6 +439,7 @@ class PlexDevice:
         return self._players
 
     def get_session_by_client_id(self, id) -> MediaContainer | None:
+        """Get session by client ID."""
         if not self._plex:
             self.get_players()
         for session in self._plex.sessions():
@@ -445,6 +449,7 @@ class PlexDevice:
         return None
 
     def get_plex_client(self) -> PlexClient | None:
+        """Get client from session."""
         if self._session:
             try:
                 self._client = PlexClient(
@@ -455,8 +460,12 @@ class PlexDevice:
                 )
                 self.events.emit(Events.CONNECTED, self.id)
                 return self._client
-            except Exception:
-                pass
+            except Exception as ex:
+                _LOG.error(
+                    "Unable to connect to client (%s) %s",
+                    self._session.player.device,
+                    ex,
+                )
         return None
 
     # def command_button(self, button: ButtonKeymap):
@@ -474,9 +483,9 @@ class PlexDevice:
             MediaAttr.STATE: PLEX_STATE_MAPPING[self.get_state()],
             MediaAttr.MUTED: self.is_volume_muted,
             MediaAttr.MEDIA_TYPE: self.media_type,
-            MediaAttr.MEDIA_IMAGE_URL: self.media_image_url
-            if self.media_image_url
-            else "",
+            MediaAttr.MEDIA_IMAGE_URL: (
+                self.media_image_url if self.media_image_url else ""
+            ),
             MediaAttr.MEDIA_TITLE: self.media_title if self.media_title else "",
             MediaAttr.MEDIA_ALBUM: self.media_album if self.media_album else "",
             MediaAttr.MEDIA_ARTIST: self.media_artist if self.media_artist else "",
@@ -495,7 +504,9 @@ class PlexDevice:
         """Set device availability and emit CONNECTED / DISCONNECTED event on change."""
         if self._available != value:
             self._available = value
-            self.events.emit(Events.CONNECTED if value else Events.DISCONNECTED, self.id)
+            self.events.emit(
+                Events.CONNECTED if value else Events.DISCONNECTED, self.id
+            )
 
     @property
     def device_config(self) -> PlexConfigDevice:
@@ -509,10 +520,12 @@ class PlexDevice:
 
     @property
     def plex_is_off(self):
+        """Signals if plex client is on or off."""
         return self._client is None
 
     @property
     def _no_active_players(self):
+        """Returns players."""
         return not self._players
 
     @property
@@ -572,13 +585,14 @@ class PlexDevice:
 
     @property
     def client(self) -> PlexClient:
-        """Return Plex Client"""
+        """Return Plex Client."""
         if not self._client:
             self._client = self.get_plex_client()
         return self._client
 
 
 def print_info(msgtype, data, error):
+    """Print info."""
     if msgtype == SIGNAL_CONNECTION_STATE:
         _LOG.debug(f"State: {data} / Error: {error}")
     else:

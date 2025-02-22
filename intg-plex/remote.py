@@ -93,7 +93,7 @@ class PlexRemote(Remote):
         self, cmd_id: str, params: dict[str, Any] | None = None
     ) -> StatusCodes:
         """Handle command."""
-        #hold = self.get_int_param("hold", params, 0)
+        # hold = self.get_int_param("hold", params, 0)
         delay = self.get_int_param("delay", params, 0)
         command = params.get("command", "")
 
@@ -112,9 +112,10 @@ class PlexRemote(Remote):
                 client.setVolume(0)
             elif command == MediaPlayerCommands.STOP:
                 client.stop()
-            elif command == MediaPlayerCommands.NEXT or command == MediaPlayerCommands.CURSOR_RIGHT:
+            elif (command in [MediaPlayerCommands.NEXT, MediaPlayerCommands.CURSOR_RIGHT]):
                 client.stepForward()
-            elif command == MediaPlayerCommands.PREVIOUS or command == MediaPlayerCommands.CURSOR_LEFT:
+            elif (
+                command in [MediaPlayerCommands.PREVIOUS, MediaPlayerCommands.CURSOR_LEFT]):
                 client.stepBack()
             elif command == MediaPlayerCommands.HOME:
                 client.goToHome()
@@ -125,7 +126,10 @@ class PlexRemote(Remote):
             elif command == MediaPlayerCommands.SEEK:
                 media_position = params.get("media_position", 0)
                 client.seekTo(media_position * 1000)
-            elif command == MediaPlayerCommands.MENU or command == MediaPlayerCommands.BACK:
+            elif (
+                command == MediaPlayerCommands.MENU
+                or command == MediaPlayerCommands.BACK
+            ):
                 client.goBack()
             elif command == MediaPlayerCommands.CONTEXT_MENU:
                 client.contextMenu()
@@ -141,13 +145,14 @@ class PlexRemote(Remote):
                 return StatusCodes.OK
             else:
                 return StatusCodes.NOT_IMPLEMENTED
-            
+
             if delay > 0 and command != MediaPlayerCommands.SEND_CMD_SEQUENCE:
                 await asyncio.sleep(delay)
             return StatusCodes.OK
         except Exception as ex:
             _LOG.info(
-                f"Client does not support the {command} command. Additional Info: %s", ex
+                f"Client does not support the {command} command. Additional Info: %s",
+                ex,
             )
             return StatusCodes.OK
 

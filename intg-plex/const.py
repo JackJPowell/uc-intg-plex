@@ -42,8 +42,6 @@ PLEX_FEATURES = [
     Features.CONTEXT_MENU,
     Features.GUIDE,
     Features.INFO,
-    #Features.AUDIO_TRACK,
-    #Features.SUBTITLE,
     Features.SEEK,
 ]
 
@@ -77,7 +75,7 @@ PLEX_REMOTE_SIMPLE_COMMANDS = [
     Commands.PREVIOUS,
     Commands.NEXT,
     Commands.FAST_FORWARD,
-    Commands.REWIND
+    Commands.REWIND,
 ]
 
 PLEX_REMOTE_UI_PAGES: List[UiPage] = [

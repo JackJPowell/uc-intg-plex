@@ -68,7 +68,7 @@ async def on_r2_enter_standby() -> None:
 
 
 async def connect_device(device: plex.PlexDevice):
-    """Connect device and send state"""
+    """Connect device and send state."""
     try:
         _LOG.debug("Connecting device %s...", device.id)
         await device.connect()
@@ -81,7 +81,7 @@ async def connect_device(device: plex.PlexDevice):
             device_id = device_from_entity_id(entity_id)
             if device_id != device.id:
                 continue
-            if entity["entity_type"] == 'media_player':
+            if entity["entity_type"] == "media_player":
                 _LOG.debug("Sending attributes %s : %s", entity_id, device.attributes)
                 api.configured_entities.update_attributes(entity_id, device.attributes)
             if entity["entity_type"] == remote.PlexRemote:
@@ -276,7 +276,6 @@ async def on_device_connection_error(device_id: str, message):
 
 async def handle_device_address_change(device_id: str, address: str) -> None:
     """Update device configuration with changed IP address."""
-
     device = config.devices.get(device_id)
     if device and device.address != address:
         _LOG.info(

@@ -54,14 +54,19 @@ class PlexMediaPlayer(MediaPlayer):
             _LOG.warning("No Plex instance for entity: %s", self.id)
             return StatusCodes.SERVICE_UNAVAILABLE
         client = self._device.client
-        client.connect()
+
+        try:
+            client.connect()
+        except Exception as ex:
+            _LOG.error("Unable to connect to client: %s", ex)
+            return StatusCodes.OK
 
         try:
             if cmd_id == Commands.VOLUME:
                 client.setVolume(params.get("volume"))
                 self._device._is_volume_muted = False
                 self._device._volume = params.get("volume")
-            elif cmd_id == Commands.PLAY_PAUSE:
+            elif cmd_id == Commands.PLAY_PAUSE or cmd_id == Commands.CURSOR_ENTER:
                 if self._device._play_state == "playing":
                     client.pause()
                 elif self._device._play_state == "paused":
@@ -71,9 +76,9 @@ class PlexMediaPlayer(MediaPlayer):
                 self._device._is_volume_muted = True
             elif cmd_id == Commands.STOP:
                 client.stop()
-            elif cmd_id == Commands.NEXT or cmd_id == Commands.CURSOR_RIGHT:
-                client.stepForward()
-            elif cmd_id == Commands.PREVIOUS or cmd_id == Commands.CURSOR_LEFT:
+            elif cmd_id in [Commands.NEXT, Commands.CURSOR_RIGHT]:
+                client.moveRight()
+            elif cmd_id in [Commands.PREVIOUS, Commands.CURSOR_LEFT]:
                 client.stepBack()
             elif cmd_id == Commands.HOME:
                 client.goToHome()
@@ -84,7 +89,7 @@ class PlexMediaPlayer(MediaPlayer):
             elif cmd_id == Commands.SEEK:
                 media_position = params.get("media_position", 0)
                 client.seekTo(media_position * 1000)
-            elif cmd_id == Commands.MENU or cmd_id == Commands.BACK:
+            elif cmd_id in [Commands.MENU, Commands.BACK]:
                 client.goBack()
             elif cmd_id == Commands.CONTEXT_MENU:
                 client.contextMenu()
@@ -97,7 +102,6 @@ class PlexMediaPlayer(MediaPlayer):
                 or cmd_id == Commands.FUNCTION_RED
                 or cmd_id == Commands.CHANNEL_DOWN
                 or cmd_id == Commands.CHANNEL_UP
-                or cmd_id == Commands.CURSOR_ENTER
             ):
                 return StatusCodes.OK
             # elif cmd_id in PLEX_ACTIONS_KEYMAP:
