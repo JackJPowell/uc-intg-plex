@@ -113,6 +113,7 @@ class PlexDevice:
         self._websocket_task = None
         self._connect_lock = Lock()
         self._reconnect_retry = 0
+        self._properties = {}
 
         _LOG.debug("Plex instance created: %s", device_config.id)
         self.event_loop.create_task(self.init_connection())
@@ -421,11 +422,11 @@ class PlexDevice:
                     (new_width, new_height), Image.Resampling.LANCZOS
                 )
 
-                imgByteArr = io.BytesIO()
-                resized_image.save(imgByteArr, format="PNG")
-                imgByteArr = imgByteArr.getvalue()
+                byte_image = io.BytesIO()
+                resized_image.save(byte_image, format="PNG")
+                byte_image = byte_image.getvalue()
 
-                image = base64.b64encode(imgByteArr).decode("ascii")
+                image = base64.b64encode(byte_image).decode("ascii")
                 self._image_cache = f"data:image/png;base64,{image}"
         return self._image_cache
 
@@ -594,6 +595,6 @@ class PlexDevice:
 def print_info(msgtype, data, error):
     """Print info."""
     if msgtype == SIGNAL_CONNECTION_STATE:
-        _LOG.debug(f"State: {data} / Error: {error}")
+        _LOG.debug("State: %s / Error: %s", data, error)
     else:
-        _LOG.debug(f"Data: {data}")
+        _LOG.debug("Data: %s",data)

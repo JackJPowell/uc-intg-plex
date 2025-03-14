@@ -376,7 +376,7 @@ async def _handle_server_config(
                     "field": {
                         "label": {
                             "value": {
-                                "en": "Please select the Plex Client you would like to control.\n\n \
+                                "en": "Please select the Plex Client you would like to control. \
                                 If it's not in the list, make sure the machine is on and the client is active.",
                             }
                         }

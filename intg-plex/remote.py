@@ -146,7 +146,7 @@ class PlexRemote(Remote):
             else:
                 return StatusCodes.NOT_IMPLEMENTED
 
-            if delay > 0 and command != MediaPlayerCommands.SEND_CMD_SEQUENCE:
+            if delay > 0:
                 await asyncio.sleep(delay)
             return StatusCodes.OK
         except Exception as ex:

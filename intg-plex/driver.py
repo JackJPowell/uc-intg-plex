@@ -329,7 +329,8 @@ def _entities_from_device_id(device_id: str) -> list[str]:
     :param device_id: the device identifier
     :return: list of entity identifiers
     """
-    return [f"media_player.{device_id}", f"remote.{device_id}"]
+    return [f"media_player.{device_id}"]
+    #, f"remote.{device_id}"
 
 
 def _configure_new_device(
@@ -351,6 +352,8 @@ def _configure_new_device(
         device = plex.PlexDevice(device_config, loop=_LOOP)
 
         # on_device_connected(device.id)
+        device.events.on(plex.Events.CONNECTED, on_device_connected)
+        device.events.on(plex.Events.DISCONNECTED, on_device_disconnected)
         device.events.on(plex.Events.ERROR, on_device_connection_error)
         device.events.on(plex.Events.UPDATE, on_device_update)
         _configured_clients[device.id] = device
@@ -377,7 +380,7 @@ def _register_available_entities(
     """
     entities = [
         media_player.PlexMediaPlayer(device_config, device),
-        remote.PlexRemote(device_config, device),
+        #remote.PlexRemote(device_config, device),
     ]
     for entity in entities:
         if api.available_entities.contains(entity.id):
@@ -426,7 +429,7 @@ async def main():
     logging.getLogger("discover").setLevel(level)
     logging.getLogger("driver").setLevel(level)
     logging.getLogger("media_player").setLevel(level)
-    logging.getLogger("remote").setLevel(level)
+    #logging.getLogger("remote").setLevel(level)
     logging.getLogger("plex").setLevel(level)
     logging.getLogger("setup_flow").setLevel(level)
     logging.getLogger("config").setLevel(level)

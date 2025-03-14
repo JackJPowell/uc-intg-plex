@@ -18,9 +18,9 @@ _LOG = logging.getLogger(__name__)
 _CFG_FILENAME = "config.json"
 
 
-def create_entity_id(id: str, entity_type: EntityTypes) -> str:
+def create_entity_id(device_id: str, entity_type: EntityTypes) -> str:
     """Create a unique entity identifier for the given receiver and entity type."""
-    return f"{entity_type.value}.{id}"
+    return f"{entity_type.value}.{device_id}"
 
 
 def device_from_entity_id(entity_id: str) -> str | None:
@@ -84,10 +84,10 @@ class Devices:
         """Get an iterator for all device configurations."""
         return iter(self._config)
 
-    def contains(self, id: str) -> bool:
+    def contains(self, device_id: str) -> bool:
         """Check if there's a device with the given device identifier."""
         for item in self._config:
-            if item.id == id:
+            if item.id == device_id:
                 return True
         return False
 
@@ -102,10 +102,10 @@ class Devices:
         if self._add_handler is not None:
             self._add_handler(plex_device)
 
-    def get(self, id: str) -> PlexConfigDevice | None:
+    def get(self, device_id: str) -> PlexConfigDevice | None:
         """Get device configuration for given identifier."""
         for item in self._config:
-            if item.id == id:
+            if item.id == device_id:
                 return dataclasses.replace(item)
         return None
 
@@ -122,9 +122,9 @@ class Devices:
                 return self.store()
         return False
 
-    def remove(self, id: str) -> bool:
+    def remove(self, device_id: str) -> bool:
         """Remove the given device configuration."""
-        device = self.get(id)
+        device = self.get(device_id)
         if device is None:
             return False
         try:
