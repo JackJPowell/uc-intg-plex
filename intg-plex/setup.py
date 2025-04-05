@@ -33,13 +33,17 @@ class SetupSteps(IntEnum):
 
     INIT = 0
     CONFIGURATION_MODE = 1
-    DISCOVER = 2
-    DEVICE_CHOICE = 3
+    SERVER = 2
+    DETAILS = 3
+    CLIENT = 4
+    SUBMIT = 5
 
 
 _setup_step = SetupSteps.INIT
 _cfg_add_device: bool = False
+_user_input: dict = {}
 _base_url: str = ""
+_is_reconfigure: bool = False
 
 _user_input_manual = RequestUserInput(
     {"en": "Connection Details"},
@@ -115,37 +119,49 @@ async def driver_setup_handler(msg: SetupDriver) -> SetupAction:
     """
     global _setup_step
     global _cfg_add_device
+    global _user_input
 
     if isinstance(msg, DriverSetupRequest):
         _setup_step = SetupSteps.INIT
         _cfg_add_device = False
+        _user_input = {}
         return await handle_driver_setup(msg)
 
     if isinstance(msg, UserDataResponse):
         _LOG.debug(msg)
         if (
-            _setup_step == SetupSteps.CONFIGURATION_MODE
+            _setup_step == SetupSteps.SUBMIT
             and "player" in msg.input_values
             and msg.input_values["player"] == "no-session"
         ):
             return await _handle_server_config(msg, use_existing_config=True)
+        if _setup_step == SetupSteps.DETAILS:
+            return await _handle_additional_settings(msg)
         if (
-            _setup_step == SetupSteps.CONFIGURATION_MODE
-            and "player" in msg.input_values
+            _setup_step == SetupSteps.CLIENT
+            and "action" in msg.input_values
+            and msg.input_values["action"] == "add"
         ):
-            return await _handle_client_selection(msg)
+            _user_input = {**_user_input, **msg.input_values}
+            return await _handle_server_config(msg, use_existing_config=True)
         if (
-            _setup_step == SetupSteps.CONFIGURATION_MODE
+            _setup_step == SetupSteps.CLIENT
             and "action" in msg.input_values
             and msg.input_values["action"] == "remove"
         ):
             return await handle_configuration_mode(msg)
         if (
-            _setup_step == SetupSteps.CONFIGURATION_MODE
+            _setup_step == SetupSteps.CLIENT
             and "action" in msg.input_values
             and msg.input_values["action"] == "reset"
         ):
             return await handle_configuration_mode(msg)
+        if _setup_step == SetupSteps.SUBMIT and "player" in msg.input_values:
+            _user_input = {**_user_input, **msg.input_values}
+            return await _handle_client_selection(msg)
+        if _setup_step == SetupSteps.CLIENT:
+            _user_input = {**_user_input, **msg.input_values}
+            return await _handle_server_config(msg, use_existing_config=True)
         if (
             _setup_step == SetupSteps.CONFIGURATION_MODE
             and "choice" in msg.input_values
@@ -175,16 +191,20 @@ async def handle_driver_setup(msg: DriverSetupRequest) -> RequestUserInput | Set
     :return: the setup action on how to continue
     """
     global _setup_step
+    global _is_reconfigure
 
     # get all configured devices for the user to choose from
     dropdown_devices = []
     for device in config.devices.all():
-        dropdown_devices.append({"id": device.id, "label": {"en": f"{device.name}"}})
+        dropdown_devices.append(
+            {"id": device.identifier, "label": {"en": f"{device.name}"}}
+        )
 
     reconfigure = msg.reconfigure
+    _is_reconfigure = True
     _LOG.debug("Starting driver setup, reconfigure=%s", reconfigure)
     if reconfigure and dropdown_devices:
-        _setup_step = SetupSteps.CONFIGURATION_MODE
+        _setup_step = SetupSteps.CLIENT
 
         dropdown_actions = [
             {
@@ -255,8 +275,7 @@ async def handle_driver_setup(msg: DriverSetupRequest) -> RequestUserInput | Set
 
     # Initial setup, make sure we have a clean configuration
     # config.devices.clear()  # triggers device instance removal
-    _setup_step = SetupSteps.CONFIGURATION_MODE
-    _LOG.debug(_user_input_manual)
+    _setup_step = SetupSteps.DETAILS
     return _user_input_manual
 
 
@@ -294,7 +313,7 @@ async def handle_configuration_mode(
             _LOG.error("Invalid configuration action: %s", action)
             return SetupError(error_type=IntegrationSetupError.OTHER)
 
-    _setup_step = SetupSteps.CONFIGURATION_MODE
+    _setup_step = SetupSteps.CLIENT
     return _user_input_manual
 
 
@@ -312,12 +331,13 @@ async def _handle_server_config(
     """
     global _setup_step
     global _base_url
+    global _user_input
 
     dropdown_devices = []
 
     if (
         use_existing_config
-        and "choice" in msg.input_values
+        and "choice" in _user_input
         and msg.input_values["choice"] != "no-session"
     ):
         ec = config.devices.get(msg.input_values["choice"])
@@ -360,11 +380,13 @@ async def _handle_server_config(
                             "label": {"en": f"{player.title} ({player.product})"},
                         }
                     )
+
         if not dropdown_devices:
             dropdown_devices.append(
                 {"id": "no-session", "label": {"en": "No Active Sessions"}}
             )
-
+        
+        _setup_step = SetupSteps.SUBMIT
         return RequestUserInput(
             {"en": "Unregistered Players"},
             [
@@ -400,6 +422,104 @@ async def _handle_server_config(
         return SetupError(error_type=IntegrationSetupError.CONNECTION_REFUSED)
 
 
+async def _handle_additional_settings(
+    msg: UserDataResponse, use_existing_config=False
+) -> RequestUserInput | SetupComplete | SetupError:
+    """
+    Process user data response in a setup process.
+
+    If ``address`` field is set by the user: try connecting to device and retrieve model information.
+    Otherwise, start LG TV discovery and present the found devices to the user to choose from.
+
+    :param msg: response data from the requested user data
+    :return: the setup action on how to continue
+    """
+    global _setup_step
+    global _base_url
+
+    dropdown_tv_settings = [
+        {
+            "id": "tv-poster-series",
+            "label": {
+                "en": "Series Poster",
+            },
+        },
+        {
+            "id": "tv-poster-season",
+            "label": {
+                "en": "Season Poster",
+            },
+        },
+        {
+            "id": "tv-poster-episode",
+            "label": {
+                "en": "Episode Poster",
+            },
+        },
+        {
+            "id": "tv-poster-art",
+            "label": {
+                "en": "Series Background Art",
+            },
+        },
+    ]
+
+    dropdown_movie_settings = [
+        {
+            "id": "movie-poster",
+            "label": {
+                "en": "Movie Poster",
+            },
+        },
+        {
+            "id": "movie-art",
+            "label": {
+                "en": "Movie Background Art",
+            },
+        },
+    ]
+
+    _setup_step = SetupSteps.CLIENT
+    return RequestUserInput(
+        {"en": "Nitpicky Details"},
+        [
+            {
+                "id": "details",
+                "label": {
+                    "en": "Nitpicky Details",
+                },
+                "field": {
+                    "label": {
+                        "value": {
+                            "en": "What artwork should be displayed?",
+                        }
+                    }
+                },
+            },
+            {
+                "id": "tv_selection",
+                "label": {"en": "TV Shows"},
+                "field": {
+                    "dropdown": {
+                        "value": dropdown_tv_settings[0]["id"],
+                        "items": dropdown_tv_settings,
+                    }
+                },
+            },
+            {
+                "id": "movie_selection",
+                "label": {"en": "Movies"},
+                "field": {
+                    "dropdown": {
+                        "value": dropdown_movie_settings[0]["id"],
+                        "items": dropdown_movie_settings,
+                    }
+                },
+            },
+        ],
+    )
+
+
 async def _handle_client_selection(msg: UserDataResponse) -> SetupComplete | SetupError:
     """
     Process user data response in a setup process.
@@ -411,8 +531,10 @@ async def _handle_client_selection(msg: UserDataResponse) -> SetupComplete | Set
     :return: the setup action on how to continue
     """
     global _setup_step
+    global _user_input
 
-    if "choice" in msg.input_values:
+
+    if "choice" in _user_input:
         ec = config.devices.get(msg.input_values["choice"])
         msg.input_values["address"] = ec.address
         msg.input_values["port"] = ec.port
@@ -420,6 +542,12 @@ async def _handle_client_selection(msg: UserDataResponse) -> SetupComplete | Set
         msg.input_values["password"] = ec.password
         msg.input_values["token"] = ec.auth_token
         msg.input_values["server"] = ec.server_name
+        msg.input_values["tv_selection"] = ec.tv_selection
+        msg.input_values["movie_selection"] = ec.movie_selection
+
+    if "tv_selection" in _user_input:
+        msg.input_values["tv_selection"] = _user_input["tv_selection"]
+        msg.input_values["movie_selection"] = _user_input["movie_selection"]
 
     address = msg.input_values["address"]
     port = msg.input_values["port"]
@@ -428,6 +556,8 @@ async def _handle_client_selection(msg: UserDataResponse) -> SetupComplete | Set
     auth_token = msg.input_values["token"]
     server_name = msg.input_values["server"]
     machine_identifier = msg.input_values["player"]
+    tv_selection = msg.input_values["tv_selection"]
+    movie_selection = msg.input_values["movie_selection"]
     name = "Plex"
     url = validate_url(address)
 
@@ -449,7 +579,7 @@ async def _handle_client_selection(msg: UserDataResponse) -> SetupComplete | Set
         server_name = server.friendlyName
 
     pcd = PlexConfigDevice(
-        id=machine_identifier,
+        identifier=machine_identifier,
         name=name,
         address=url,
         port=port,
@@ -457,6 +587,8 @@ async def _handle_client_selection(msg: UserDataResponse) -> SetupComplete | Set
         password=password,
         auth_token=auth_token,
         server_name=server_name,
+        tv_selection=tv_selection,
+        movie_selection=movie_selection,
     )
 
     config.devices.add(pcd)
@@ -489,7 +621,7 @@ def get_configured_device_ids() -> list:
     all_devices = config.devices.all()
     ids = []
     for device in all_devices:
-        ids.append(device.id)
+        ids.append(device.identifier)
     return ids
 
 

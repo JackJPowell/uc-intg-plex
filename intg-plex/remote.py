@@ -112,10 +112,15 @@ class PlexRemote(Remote):
                 client.setVolume(0)
             elif command == MediaPlayerCommands.STOP:
                 client.stop()
-            elif (command in [MediaPlayerCommands.NEXT, MediaPlayerCommands.CURSOR_RIGHT]):
+            elif command in [
+                MediaPlayerCommands.NEXT,
+                MediaPlayerCommands.CURSOR_RIGHT,
+            ]:
                 client.stepForward()
-            elif (
-                command in [MediaPlayerCommands.PREVIOUS, MediaPlayerCommands.CURSOR_LEFT]):
+            elif command in [
+                MediaPlayerCommands.PREVIOUS,
+                MediaPlayerCommands.CURSOR_LEFT,
+            ]:
                 client.stepBack()
             elif command == MediaPlayerCommands.HOME:
                 client.goToHome()

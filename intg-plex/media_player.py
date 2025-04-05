@@ -8,9 +8,9 @@ import logging
 from typing import Any
 
 import plex
-from config import PlexConfigDevice, create_entity_id
+from config import PlexConfigDevice
 from const import PLEX_SIMPLE_COMMANDS
-from ucapi import EntityTypes, MediaPlayer, StatusCodes
+from ucapi import MediaPlayer, StatusCodes, media_player
 from ucapi.media_player import Commands, DeviceClasses, Options
 
 _LOG = logging.getLogger(__name__)
@@ -23,17 +23,28 @@ class PlexMediaPlayer(MediaPlayer):
         """Initialize the class."""
         self._device: plex.PlexDevice = device
         _LOG.debug("PlexMediaPlayer init")
-        entity_id = create_entity_id(config_device.id, EntityTypes.MEDIA_PLAYER)
+        # entity_id = create_entity_id(config_device.identifier, EntityTypes.MEDIA_PLAYER)
+        entity_id = config_device.identifier
         features = device.supported_features
-        attributes = device.attributes
+        # attributes = device.attributes
         options = {Options.SIMPLE_COMMANDS: list(PLEX_SIMPLE_COMMANDS.keys())}
         super().__init__(
             entity_id,
             config_device.name,
             features,
-            attributes,
-            device_class=DeviceClasses.RECEIVER,
+            {
+                media_player.Attributes.STATE: media_player.States.UNAVAILABLE,
+                media_player.Attributes.VOLUME: 0,
+                media_player.Attributes.MEDIA_DURATION: 0,
+                media_player.Attributes.MEDIA_POSITION: 0,
+                media_player.Attributes.MEDIA_IMAGE_URL: "",
+                media_player.Attributes.MEDIA_TITLE: "",
+                media_player.Attributes.MEDIA_ARTIST: "",
+                media_player.Attributes.MEDIA_ALBUM: "",
+            },
+            device_class=DeviceClasses.TV,
             options=options,
+            cmd_handler=self.command,
         )
 
     async def command(
@@ -54,12 +65,6 @@ class PlexMediaPlayer(MediaPlayer):
             _LOG.warning("No Plex instance for entity: %s", self.id)
             return StatusCodes.SERVICE_UNAVAILABLE
         client = self._device.client
-
-        try:
-            client.connect()
-        except Exception as ex:
-            _LOG.error("Unable to connect to client: %s", ex)
-            return StatusCodes.OK
 
         try:
             if cmd_id == Commands.VOLUME:
@@ -104,10 +109,6 @@ class PlexMediaPlayer(MediaPlayer):
                 or cmd_id == Commands.CHANNEL_UP
             ):
                 return StatusCodes.OK
-            # elif cmd_id in PLEX_ACTIONS_KEYMAP:
-            #     self._device.command_action(PLEX_ACTIONS_KEYMAP[cmd_id])
-            # elif cmd_id in self.options[Options.SIMPLE_COMMANDS]:
-            #     self._device.command_action(PLEX_SIMPLE_COMMANDS[cmd_id])
             else:
                 return StatusCodes.NOT_IMPLEMENTED
             return StatusCodes.OK

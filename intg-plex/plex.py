@@ -79,8 +79,8 @@ class PlexDevice:
         loop: AbstractEventLoop | None = None,
     ):
         """Create instance with Plex client."""
-        self._device_config = device_config
-        self.id: str = device_config.id
+        self._device = device_config
+        self.identifier: str = device_config.identifier
         self._name: str = device_config.name
         self.event_loop = loop or asyncio.get_running_loop()
         self.events = AsyncIOEventEmitter(self.event_loop)
@@ -96,6 +96,7 @@ class PlexDevice:
         self._players: list[Any, Any] = None
         self._session: MediaContainer = None
         self._client: PlexClient = None
+        self._is_on: bool | None = False
 
         self._connect_error = False
         self._available: bool = True
@@ -115,7 +116,7 @@ class PlexDevice:
         self._reconnect_retry = 0
         self._properties = {}
 
-        _LOG.debug("Plex instance created: %s", device_config.id)
+        _LOG.debug("Plex instance created: %s", device_config.identifier)
         self.event_loop.create_task(self.init_connection())
 
         self._connection_status: Future | None = None
@@ -130,7 +131,7 @@ class PlexDevice:
             finally:
                 self._plex_connection = None
 
-        self.events.emit(Events.CONNECTING, self.id)
+        self.events.emit(Events.CONNECTING, self.identifier)
         self._plex = self.get_plex_server()
 
         self._plex_connection: PlexWebsocket = PlexWebsocket(
@@ -140,7 +141,7 @@ class PlexDevice:
         )
         self.event_loop.create_task(self._plex_connection.listen())
         self._plex_connection.state = STATE_CONNECTED
-        self._session = self.get_session_by_client_id(self.device_config.id)
+        self._session = self.get_session_by_client_id(self.device_config.identifier)
         if self._session:
             self._client = self.get_plex_client()
             self._attr_state = "ON"
@@ -149,7 +150,7 @@ class PlexDevice:
 
     def get_plex_server(self) -> PlexServer:
         """Get a reference to the PMS."""
-        config = self._device_config
+        config = self._device
 
         url = f"{config.address}:{config.port}"
         try:
@@ -195,7 +196,7 @@ class PlexDevice:
             self._reconnect_retry += 1
             _LOG.debug(
                 "Plex websocket %s not connected, retry %s / %s",
-                self._device_config.id,
+                self._device.identifier,
                 self._reconnect_retry,
                 CONNECTION_RETRIES,
             )
@@ -206,7 +207,8 @@ class PlexDevice:
                 await asyncio.wait_for(shield(self.connect()), DEFAULT_TIMEOUT * 2)
             except asyncio.TimeoutError:
                 _LOG.debug(
-                    "Plex websocket too slow to reconnect on %s", self._device_config.id
+                    "Plex websocket too slow to reconnect on %s",
+                    self._device.identifier,
                 )
         else:
             if self._reconnect_retry > 0:
@@ -225,7 +227,7 @@ class PlexDevice:
         # log exception
         _LOG.error(
             f"Websocket task failed to %s, msg={message}, exception={exception}",
-            self._device_config.id,
+            self._device.identifier,
         )
 
     async def start_watchdog(self):
@@ -234,7 +236,7 @@ class PlexDevice:
             await asyncio.sleep(WEBSOCKET_WATCHDOG_INTERVAL)
             try:
                 if not await self._reconnect_websocket_if_disconnected():
-                    _LOG.debug("Stop watchdog for %s", self._device_config.id)
+                    _LOG.debug("Stop watchdog for %s", self._device.identifier)
                     self._websocket_task = None
                     break
             except Exception as ex:
@@ -246,18 +248,18 @@ class PlexDevice:
             if self._connect_lock.locked():
                 _LOG.debug(
                     "Connect to %s : already in progress, returns",
-                    self._device_config.id,
+                    self._device.identifier,
                 )
                 return True
-            _LOG.debug("Connecting to %s", self._device_config.id)
+            _LOG.debug("Connecting to %s", self._device.identifier)
             await self._connect_lock.acquire()
             if self._plex_connection and self._plex_connection.state == STATE_CONNECTED:
-                _LOG.debug("Already connected to %s", self._device_config.id)
+                _LOG.debug("Already connected to %s", self._device.identifier)
                 return True
             await self.init_connection()
 
             self._connect_error = False
-            _LOG.debug("Connection successful to %s", self._device_config.id)
+            _LOG.debug("Connection successful to %s", self._device.identifier)
             self._reconnect_retry = 0
             if self._websocket_task is None:
                 self._websocket_task = self.event_loop.create_task(
@@ -270,14 +272,14 @@ class PlexDevice:
 
         except Exception as ex:
             _LOG.error(
-                "Unknown exception connect to %s : %s", self._device_config.id, ex
+                "Unknown exception connect to %s : %s", self._device.identifier, ex
             )
         finally:
             # After 10 retries, reconnection delay will go from 10 to 30s and stop logging
             if self._reconnect_retry >= CONNECTION_RETRIES and self._connect_error:
                 _LOG.debug(
                     "Plex websocket not connected, abort retries to %s",
-                    self._device_config.id,
+                    self._device.identifier,
                 )
                 if self._websocket_task:
                     try:
@@ -290,12 +292,12 @@ class PlexDevice:
                     self.start_watchdog()
                 )
             self._available = True
-            self.events.emit(Events.CONNECTED, self.id)
+            self.events.emit(Events.CONNECTED, self.identifier)
             self._connect_lock.release()
 
     async def disconnect(self):
         """Disconnect from Plex Websocket."""
-        _LOG.debug("Disconnect %s", self.id)
+        _LOG.debug("Disconnect %s", self.identifier)
         try:
             if self._websocket_task:
                 self._websocket_task.cancel()
@@ -306,7 +308,7 @@ class PlexDevice:
         except Exception as error:
             _LOG.error(
                 "Logout to %s failed: [%s]",
-                self._device_config.id,
+                self._device.identifier,
                 error,
             )
             # self._available = False
@@ -327,13 +329,14 @@ class PlexDevice:
         self._media_artist = ""
         self._media_image_url = ""
         self._image_cache = None
-        updated_data[MediaAttr.STATE] = "OFF"
-        updated_data[MediaAttr.MEDIA_POSITION] = 0
-        updated_data[MediaAttr.MEDIA_DURATION] = 0
-        updated_data[MediaAttr.MEDIA_TITLE] = ""
-        updated_data[MediaAttr.MEDIA_IMAGE_URL] = ""
-        updated_data[MediaAttr.MEDIA_ALBUM] = ""
-        updated_data[MediaAttr.MEDIA_ARTIST] = ""
+        updated_data["state"] = "OFF"
+        updated_data["position"] = 0
+        updated_data["duration"] = 0
+        updated_data["title"] = ""
+        updated_data["artwork"] = ""
+        updated_data["album"] = ""
+        updated_data["artist"] = ""
+        updated_data["media_type"] = ""
         return updated_data
 
     def plex_ws_updates(self, msgtype, data, error) -> None:
@@ -346,58 +349,82 @@ class PlexDevice:
                 case "playing" | "paused":
                     if data["PlaySessionStateNotification"]:
                         for item in data["PlaySessionStateNotification"]:
-                            if item["clientIdentifier"] == self.device_config.id:
+                            if (
+                                item["clientIdentifier"]
+                                == self.device_config.identifier
+                            ):
                                 payload = item
                                 break
 
                         if payload and payload["state"] == "stopped":
                             updated_data = self._reset_media_state()
+                            self._image_cache = None
                         elif payload:
                             self._play_state = payload["state"]
-                            updated_data[MediaAttr.STATE] = self._play_state
+                            updated_data["state"] = self._play_state
+                            self._is_on = True
 
                             self._view_offset = payload["viewOffset"] / 1000
-                            updated_data[MediaAttr.MEDIA_POSITION] = self._view_offset
+                            updated_data["position"] = self._view_offset
 
                             self._session = self.get_session_by_client_id(
-                                self.device_config.id
+                                self.device_config.identifier
                             )
                             if self._session:
                                 self._key = payload["key"]
 
                                 self._media_duration = self._session.duration / 1000
-                                updated_data[MediaAttr.MEDIA_DURATION] = (
-                                    self._media_duration
-                                )
+                                updated_data["total_time"] = self._media_duration
 
-                                if self._media_title != self._session.title:
-                                    self._image_cache = None
+                                updated_data["media_type"] = self._session.TYPE
+
+                                # if self._media_title != self._session.title:
+                                #     self._image_cache = None
 
                                 self._media_title = self._session.title
                                 if self._session.type == "episode":
                                     self._media_artist = (
                                         self._session.seasonEpisode.upper()
                                     )
-                                    updated_data[MediaAttr.MEDIA_ARTIST] = (
-                                        self._media_artist
-                                    )
-                                updated_data[MediaAttr.MEDIA_TITLE] = self._media_title
+                                    updated_data["artist"] = self._media_artist
+                                updated_data["title"] = self._media_title
 
-                                if self._session.type == "episode":
-                                    url = self._session.artUrl
-                                else:
-                                    url = self._session.posterUrl
+                                url = ""
+                                try:
+                                    if self._session.type == "episode":
+                                        match self._device.tv_selection:
+                                            case "tv-poster-series":
+                                                url = self.build_plex_url(self._session.grandparentThumb)
+                                            case "tv-poster-season":
+                                                url = self.build_plex_url(self._session.parentThumb)
+                                            case "tv-poster-episode":
+                                                url = self.build_plex_url(self._session.thumb)
+                                            case "tv-poster-art":
+                                                url = self._session.artUrl
+                                            case _:
+                                                url = self.build_plex_url(self._session.grandparentThumb)
+                                    else:
+                                        match self._device.movie_selection:
+                                            case "movie-poster":
+                                                url = self._session.posterUrl
+                                            case "movie-art":
+                                                url = self._session.artUrl
+                                            case _:
+                                                url = self._session.posterUrl
+                                except Exception:
+                                    if self._session.type == "episode":
+                                        url = self.build_plex_url(self._session.grandparentThumb)
+                                    else:
+                                        url = self._session.posterUrl
 
                                 self._media_image_url = self.store_image_as_base64(
-                                    url, 800
+                                    url, 400
                                 )
 
-                                updated_data[MediaAttr.MEDIA_IMAGE_URL] = (
-                                    self._media_image_url
-                                )
+                                updated_data["artwork"] = self._media_image_url
 
         if updated_data:
-            self.events.emit(Events.UPDATE, self.id, updated_data)
+            self.events.emit(Events.UPDATE, self.identifier, updated_data)
 
     def store_image_as_base64(self, url, max_size):
         """Retrieve and store image as base64 data."""
@@ -426,9 +453,16 @@ class PlexDevice:
                 resized_image.save(byte_image, format="PNG")
                 byte_image = byte_image.getvalue()
 
-                image = base64.b64encode(byte_image).decode("ascii")
+                image = base64.b64encode(byte_image).decode("utf-8")
                 self._image_cache = f"data:image/png;base64,{image}"
         return self._image_cache
+
+
+    def build_plex_url(self, path: str) -> str:
+        """Build a plex url from config and supplied path"""
+        config = self._device
+        return f"{config.address}:{config.port}{path}?X-Plex-Token={config.auth_token}"
+
 
     def get_players(self) -> list[Any, Any]:
         """Get active players from session."""
@@ -453,13 +487,10 @@ class PlexDevice:
         """Get client from session."""
         if self._session:
             try:
-                self._client = PlexClient(
-                    server=self._plex,
-                    baseurl=f"http://{self._session.player.address}:32500",
-                    identifier=self._session.player.machineIdentifier,
-                    token=self._plex.createToken(),
-                )
-                self.events.emit(Events.CONNECTED, self.id)
+                self._client = self._session.player
+                self._client.proxyThroughServer(True, self._plex)
+
+                self.events.emit(Events.CONNECTED, self.identifier)
                 return self._client
             except Exception as ex:
                 _LOG.error(
@@ -496,6 +527,10 @@ class PlexDevice:
         return attributes
 
     @property
+    def name(self) -> str:
+        return self._name
+
+    @property
     def available(self) -> bool:
         """Return True if device is available."""
         return self._available
@@ -506,18 +541,27 @@ class PlexDevice:
         if self._available != value:
             self._available = value
             self.events.emit(
-                Events.CONNECTED if value else Events.DISCONNECTED, self.id
+                Events.CONNECTED if value else Events.DISCONNECTED, self.identifier
             )
+
+    @property
+    def is_on(self) -> bool | None:
+        """Whether the Apple TV is on or off. Returns None if not connected."""
+        if self._plex is None:
+            return None
+        if self._play_state:
+            self._is_on = True
+        return self._is_on
 
     @property
     def device_config(self) -> PlexConfigDevice:
         """Return device configuration."""
-        return self._device_config
+        return self._device
 
     @property
     def host(self) -> str:
         """Return the host of the device as string."""
-        return self._device_config.id
+        return self._device.identifier
 
     @property
     def plex_is_off(self):
@@ -597,4 +641,4 @@ def print_info(msgtype, data, error):
     if msgtype == SIGNAL_CONNECTION_STATE:
         _LOG.debug("State: %s / Error: %s", data, error)
     else:
-        _LOG.debug("Data: %s",data)
+        _LOG.debug("Data: %s", data)

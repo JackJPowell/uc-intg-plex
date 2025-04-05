@@ -39,7 +39,7 @@ def device_from_entity_id(entity_id: str) -> str | None:
 class PlexConfigDevice:
     """Plex device configuration."""
 
-    id: str
+    identifier: str
     name: str
     address: str
     username: str
@@ -47,6 +47,8 @@ class PlexConfigDevice:
     auth_token: str
     server_name: str
     port: str
+    tv_selection: str
+    movie_selection: str
 
 
 class _EnhancedJSONEncoder(json.JSONEncoder):
@@ -87,13 +89,13 @@ class Devices:
     def contains(self, device_id: str) -> bool:
         """Check if there's a device with the given device identifier."""
         for item in self._config:
-            if item.id == device_id:
+            if item.identifier == device_id:
                 return True
         return False
 
     def add(self, plex_device: PlexConfigDevice) -> None:
         """Add a new configured Plex device."""
-        existing = self.get_by_id(plex_device.id)
+        existing = self.get_by_id(plex_device.identifier)
         if existing:
             _LOG.debug("Replacing existing device %s => %s", existing, plex_device)
             self._config.remove(existing)
@@ -105,20 +107,22 @@ class Devices:
     def get(self, device_id: str) -> PlexConfigDevice | None:
         """Get device configuration for given identifier."""
         for item in self._config:
-            if item.id == device_id:
+            if item.identifier == device_id:
                 return dataclasses.replace(item)
         return None
 
     def update(self, device: PlexConfigDevice) -> bool:
         """Update a configured Plex device and persist configuration."""
         for item in self._config:
-            if item.id == device.id:
+            if item.identifier == device.identifier:
                 item.name = device.name
                 item.address = device.address
                 item.port = device.port
                 item.username = device.username
                 item.password = device.password
                 item.ssl = device.ssl
+                item.tv_selection = device.tv_selection
+                item.movie_selection = device.movie_selection
                 return self.store()
         return False
 
@@ -190,7 +194,7 @@ class Devices:
         :return: A copy of the device configuration or None if not found.
         """
         for item in self._config:
-            if item.id == machine_id:
+            if item.identifier == machine_id:
                 return dataclasses.replace(item)
         return None
 
