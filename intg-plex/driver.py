@@ -80,14 +80,7 @@ async def on_subscribe_entities(entity_ids: list[str]) -> None:
         if entity_id in _configured_clients:
             client = _configured_clients[entity_id]
             _LOG.info("Add '%s' to configured devices and connect", client.name)
-            if client.is_on is None:
-                state = ucapi.media_player.States.UNAVAILABLE
-            else:
-                state = (
-                    ucapi.media_player.States.ON
-                    if client.is_on
-                    else ucapi.media_player.States.OFF
-                )
+            state = _plex_state_to_media_player_state(client.state)
             api.configured_entities.update_attributes(
                 entity_id, {ucapi.media_player.Attributes.STATE: state}
             )
@@ -122,10 +115,10 @@ async def on_device_connected(device_id: str):
     """Handle device connection."""
     _LOG.debug("Plex connected: %s", device_id)
     state = ucapi.media_player.States.UNKNOWN
-    if device_id in _configured_clients:
-        atv = _configured_clients[device_id]
-        if atv_state := atv.state:
-            state = _plex_state_to_media_player_state(atv_state)
+    device = config.devices.get(device_id)
+    if device:
+        client = _configured_clients[device_id]
+        state = _plex_state_to_media_player_state(client.state)
 
     api.configured_entities.update_attributes(
         device_id, {ucapi.media_player.Attributes.STATE: state}
@@ -137,13 +130,11 @@ async def on_device_connected(device_id: str):
 
 async def on_device_disconnected(device_id: str):
     """Handle device disconnection."""
-    _LOG.debug("Plex disconnected: %s", device_id)
+    _LOG.debug("Plex disconnected --on_device_disconnected--: %s", device_id)
 
     api.configured_entities.update_attributes(
-        device_id,
-        {ucapi.media_player.Attributes.STATE: ucapi.media_player.States.UNAVAILABLE},
+        device_id, {ucapi.media_player.Attributes.STATE: ucapi.media_player.States.UNAVAILABLE}
     )
-
 
 async def on_device_connection_error(identifier: str, message) -> None:
     """Set entities of Plex client to state UNAVAILABLE if Plex connection error occurred."""
@@ -152,27 +143,20 @@ async def on_device_connection_error(identifier: str, message) -> None:
         identifier,
         {ucapi.media_player.Attributes.STATE: ucapi.media_player.States.UNAVAILABLE},
     )
-    await api.set_device_state(ucapi.DeviceStates.ERROR)
 
 
 def _plex_state_to_media_player_state(device_state) -> ucapi.media_player.States:
     match device_state:
-        case "on":
+        case "on" | "idle" | "stopped":
             state = ucapi.media_player.States.ON
         case "off":
             state = ucapi.media_player.States.OFF
-        case "idle":
-            state = ucapi.media_player.States.ON
         case "buffering":
             state = ucapi.media_player.States.BUFFERING
         case "paused":
             state = ucapi.media_player.States.PAUSED
-        case "playing":
+        case "playing" | "seeking":
             state = ucapi.media_player.States.PLAYING
-        case "seeking":
-            state = ucapi.media_player.States.PLAYING
-        case "stopped":
-            state = ucapi.media_player.States.ON
         case _:
             state = ucapi.media_player.States.OFF
     return state
@@ -212,11 +196,7 @@ async def on_device_update(device_id: str, update: dict[str, Any] | None) -> Non
 
     if "state" in update:
         state = _plex_state_to_media_player_state(update["state"])
-        if (
-            target_entity.attributes.get(ucapi.media_player.Attributes.STATE, None)
-            != state
-        ):
-            attributes[ucapi.media_player.Attributes.STATE] = state
+        attributes[ucapi.media_player.Attributes.STATE] = state
 
     # updates initiated by the poller always include the data, even if it hasn't changed
     if "position" in update:
@@ -244,18 +224,15 @@ async def on_device_update(device_id: str, update: dict[str, Any] | None) -> Non
 
         attributes[ucapi.media_player.Attributes.MEDIA_TYPE] = media_type
 
-    if ucapi.media_player.Attributes.STATE in attributes:
-        if (
-            attributes[ucapi.media_player.Attributes.STATE]
-            == ucapi.media_player.States.OFF
-        ):
-            attributes[ucapi.media_player.Attributes.MEDIA_IMAGE_URL] = ""
-            attributes[ucapi.media_player.Attributes.MEDIA_ALBUM] = ""
-            attributes[ucapi.media_player.Attributes.MEDIA_ARTIST] = ""
-            attributes[ucapi.media_player.Attributes.MEDIA_TITLE] = ""
-            attributes[ucapi.media_player.Attributes.MEDIA_TYPE] = ""
-            attributes[ucapi.media_player.Attributes.SOURCE] = ""
-            attributes[ucapi.media_player.Attributes.MEDIA_DURATION] = 0
+    if "state" in update and update["state"] == "OFF":
+        attributes[ucapi.media_player.Attributes.STATE] = _plex_state_to_media_player_state(update["state"])
+        attributes[ucapi.media_player.Attributes.MEDIA_IMAGE_URL] = ""
+        attributes[ucapi.media_player.Attributes.MEDIA_ALBUM] = ""
+        attributes[ucapi.media_player.Attributes.MEDIA_ARTIST] = ""
+        attributes[ucapi.media_player.Attributes.MEDIA_TITLE] = ""
+        attributes[ucapi.media_player.Attributes.MEDIA_TYPE] = ""
+        attributes[ucapi.media_player.Attributes.SOURCE] = ""
+        attributes[ucapi.media_player.Attributes.MEDIA_DURATION] = 0
 
     if attributes:
         if api.configured_entities.contains(device_id):
@@ -274,9 +251,7 @@ def _entities_from_device_id(device_id: str) -> list[str]:
     return [device_id]
 
 
-def _add_configured_client(
-    device_config: config.PlexConfigDevice, connect: bool = True
-) -> None:
+def _add_configured_client(device_config: config.PlexConfigDevice) -> None:
     """
     Create and configure a new device.
 
@@ -304,13 +279,6 @@ def _add_configured_client(
         device.events.on(plex.Events.UPDATE, on_device_update)
         _configured_clients[device.identifier] = device
 
-        async def start_connection():
-            await device.connect()
-
-        if connect:
-            # start background task
-            _LOOP.create_task(start_connection())
-
         _register_available_entities(device_config, device)
 
 
@@ -334,7 +302,7 @@ def _register_available_entities(
 def on_device_added(device: config.PlexConfigDevice) -> None:
     """Handle a newly added device in the configuration."""
     _LOG.debug("New device added: %s", device)
-    _add_configured_client(device, connect=False)
+    _add_configured_client(device)
 
 
 def on_device_removed(device: config.PlexConfigDevice | None) -> None:
@@ -368,10 +336,8 @@ async def main():
     logging.basicConfig()
 
     level = os.getenv("UC_LOG_LEVEL", "DEBUG").upper()
-    logging.getLogger("discover").setLevel(level)
     logging.getLogger("driver").setLevel(level)
     logging.getLogger("media_player").setLevel(level)
-    # logging.getLogger("remote").setLevel(level)
     logging.getLogger("plex").setLevel(level)
     logging.getLogger("setup_flow").setLevel(level)
     logging.getLogger("config").setLevel(level)
@@ -380,7 +346,7 @@ async def main():
         api.config_dir_path, on_device_added, on_device_removed
     )
     for device_config in config.devices.all():
-        _add_configured_client(device_config, connect=False)
+        _add_configured_client(device_config)
 
     await api.init("driver.json", setup.driver_setup_handler)
 

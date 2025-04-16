@@ -33,7 +33,7 @@ class PlexMediaPlayer(MediaPlayer):
             config_device.name,
             features,
             {
-                media_player.Attributes.STATE: media_player.States.UNAVAILABLE,
+                media_player.Attributes.STATE: media_player.States.UNKNOWN,
                 media_player.Attributes.VOLUME: 0,
                 media_player.Attributes.MEDIA_DURATION: 0,
                 media_player.Attributes.MEDIA_POSITION: 0,

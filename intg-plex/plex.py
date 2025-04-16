@@ -576,7 +576,7 @@ class PlexDevice:
     @property
     def state(self) -> States:
         """Return the cached state of the device."""
-        return self._attr_state
+        return self.get_state()
 
     @property
     def supported_features(self) -> list[Features]:
