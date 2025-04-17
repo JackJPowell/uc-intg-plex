@@ -201,6 +201,7 @@ async def on_device_update(device_id: str, update: dict[str, Any] | None) -> Non
     # updates initiated by the poller always include the data, even if it hasn't changed
     if "position" in update:
         attributes[ucapi.media_player.Attributes.MEDIA_POSITION] = update["position"]
+        attributes["media_position_updated_at"] = update["position_updated_at"]
     if "total_time" in update:
         attributes[ucapi.media_player.Attributes.MEDIA_DURATION] = update["total_time"]
     if "artwork" in update:

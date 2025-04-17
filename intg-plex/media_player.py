@@ -112,7 +112,7 @@ class PlexMediaPlayer(MediaPlayer):
             else:
                 return StatusCodes.NOT_IMPLEMENTED
             return StatusCodes.OK
-        except Exception as ex:
+        except Exception as ex:  # pylint: disable=broad-exception-caught
             _LOG.info(
                 f"Client does not support the {cmd_id} command. Additional Info: %s", ex
             )

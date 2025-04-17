@@ -8,6 +8,7 @@ import asyncio
 import base64
 import io
 import logging
+from datetime import UTC, datetime
 from asyncio import AbstractEventLoop, Future, Lock, shield
 from enum import IntEnum
 from io import BytesIO
@@ -126,7 +127,7 @@ class PlexDevice:
         if self._plex_connection:
             try:
                 await self._plex_connection.close()
-            except Exception:
+            except Exception:  # pylint: disable=broad-exception-caught
                 pass
             finally:
                 self._plex_connection = None
@@ -160,7 +161,7 @@ class PlexDevice:
                 account = MyPlexAccount(config.username, config.password)
                 self._plex: PlexServer = account.resource(config.server_name).connect()
             _LOG.debug("Connection %s succeeded over HTTP", url)
-        except Exception as ex:
+        except Exception as ex:  # pylint: disable=broad-exception-caught
             _LOG.error("Cannot connect to %s over HTTP [%s]", url, ex)
 
         return self._plex
@@ -182,7 +183,7 @@ class PlexDevice:
         if close:
             try:
                 await self._plex_connection.close()
-            except Exception:
+            except Exception:  # pylint: disable=broad-exception-caught
                 pass
 
     async def _reconnect_websocket_if_disconnected(self, *_) -> bool:
@@ -216,20 +217,6 @@ class PlexDevice:
                 _LOG.debug("Plex websocket is connected")
         return True
 
-    def exception_handler(self, loop, context):
-        """Handle exception for running loop."""
-        if not context or context.get("exception", None) is None:
-            return
-        exception = context.get("exception", None)
-        message = context.get("message", None)
-        if message is None:
-            message = ""
-        # log exception
-        _LOG.error(
-            f"Websocket task failed to %s, msg={message}, exception={exception}",
-            self._device.identifier,
-        )
-
     async def start_watchdog(self):
         """Start websocket watchdog."""
         while True:
@@ -239,7 +226,7 @@ class PlexDevice:
                     _LOG.debug("Stop watchdog for %s", self._device.identifier)
                     self._websocket_task = None
                     break
-            except Exception as ex:
+            except Exception as ex:  # pylint: disable=broad-exception-caught
                 _LOG.error("Unknown exception %s", ex)
 
     async def connect(self) -> bool:
@@ -270,7 +257,7 @@ class PlexDevice:
 
             return True
 
-        except Exception as ex:
+        except Exception as ex:  # pylint: disable=broad-exception-caught
             _LOG.error(
                 "Unknown exception connect to %s : %s", self._device.identifier, ex
             )
@@ -284,7 +271,7 @@ class PlexDevice:
                 if self._websocket_task:
                     try:
                         self._websocket_task.cancel()
-                    except Exception as ex:
+                    except Exception as ex:  # pylint: disable=broad-exception-caught
                         _LOG.error("Failed to cancel websocket task %s", ex)
                     self._websocket_task = None
             elif self._websocket_task is None:
@@ -305,7 +292,7 @@ class PlexDevice:
                 self._plex_connection.close()
             self._previous_state = self._attr_state
             self._attr_state = States.OFF
-        except Exception as error:
+        except Exception as error:  # pylint: disable=broad-exception-caught
             _LOG.error(
                 "Logout to %s failed: [%s]",
                 self._device.identifier,
@@ -337,6 +324,7 @@ class PlexDevice:
         updated_data["album"] = ""
         updated_data["artist"] = ""
         updated_data["media_type"] = ""
+        updated_data["media_position_updated_at"] = 0
         return updated_data
 
     def plex_ws_updates(self, msgtype, data, error) -> None:
@@ -366,6 +354,7 @@ class PlexDevice:
 
                             self._view_offset = payload["viewOffset"] / 1000
                             updated_data["position"] = self._view_offset
+                            updated_data["media_position_updated_at"] = datetime.now(tz=UTC).isoformat()
 
                             self._session = self.get_session_by_client_id(
                                 self.device_config.identifier
@@ -411,7 +400,7 @@ class PlexDevice:
                                                 url = self._session.artUrl
                                             case _:
                                                 url = self._session.posterUrl
-                                except Exception:
+                                except Exception:  # pylint: disable=broad-exception-caught
                                     if self._session.type == "episode":
                                         url = self.build_plex_url(self._session.grandparentThumb)
                                     else:
@@ -425,6 +414,9 @@ class PlexDevice:
 
         if updated_data:
             self.events.emit(Events.UPDATE, self.identifier, updated_data)
+
+        if error:
+            _LOG.debug(error)
 
     def store_image_as_base64(self, url, max_size):
         """Retrieve and store image as base64 data."""
@@ -473,13 +465,13 @@ class PlexDevice:
                     self._players.append(player)
         return self._players
 
-    def get_session_by_client_id(self, id) -> MediaContainer | None:
-        """Get session by client ID."""
+    def get_session_by_client_id(self, identifier) -> MediaContainer | None:
+        """Get session by client identifier."""
         if not self._plex:
             self.get_players()
         for session in self._plex.sessions():
             for player in session.players:
-                if player.machineIdentifier == id and player.local is True:
+                if player.machineIdentifier == identifier and player.local is True:
                     return session
         return None
 
@@ -492,7 +484,7 @@ class PlexDevice:
 
                 self.events.emit(Events.CONNECTED, self.identifier)
                 return self._client
-            except Exception as ex:
+            except Exception as ex:  # pylint: disable=broad-exception-caught
                 _LOG.error(
                     "Unable to connect to client (%s) %s",
                     self._session.player.device,
