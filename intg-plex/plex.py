@@ -324,7 +324,6 @@ class PlexDevice:
         updated_data["album"] = ""
         updated_data["artist"] = ""
         updated_data["media_type"] = ""
-        updated_data["media_position_updated_at"] = 0
         return updated_data
 
     def plex_ws_updates(self, msgtype, data, error) -> None:
