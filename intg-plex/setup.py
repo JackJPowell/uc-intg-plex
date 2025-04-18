@@ -385,7 +385,7 @@ async def _handle_server_config(
             dropdown_devices.append(
                 {"id": "no-session", "label": {"en": "No Active Sessions"}}
             )
-        
+
         _setup_step = SetupSteps.SUBMIT
         return RequestUserInput(
             {"en": "Unregistered Players"},
@@ -532,7 +532,6 @@ async def _handle_client_selection(msg: UserDataResponse) -> SetupComplete | Set
     """
     global _setup_step
     global _user_input
-
 
     if "choice" in _user_input:
         ec = config.devices.get(msg.input_values["choice"])

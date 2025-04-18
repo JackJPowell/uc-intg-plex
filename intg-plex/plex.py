@@ -8,7 +8,6 @@ import asyncio
 import base64
 import io
 import logging
-from datetime import UTC, datetime
 from asyncio import AbstractEventLoop, Future, Lock, shield
 from enum import IntEnum
 from io import BytesIO
@@ -23,8 +22,7 @@ from plexapi.myplex import MyPlexAccount
 from plexapi.server import PlexClient, PlexServer
 from plexwebsocket import SIGNAL_CONNECTION_STATE, STATE_CONNECTED, PlexWebsocket
 from pyee.asyncio import AsyncIOEventEmitter
-from ucapi.media_player import Attributes as MediaAttr
-from ucapi.media_player import Features, MediaType
+from ucapi.media_player import Features
 from ucapi.media_player import States as MediaStates
 
 _PlexDeviceT = TypeVar("_PlexDeviceT", bound="PlexDevice")
@@ -57,7 +55,9 @@ class States(IntEnum):
     PLAYING = 4
     PAUSED = 5
     STOPPED = 6
-    IDLE = 7
+    BUFFERING = 7
+    SEEKING = 8
+    IDLE = 9
 
 
 PLEX_STATE_MAPPING = {
@@ -103,13 +103,7 @@ class PlexDevice:
         self._available: bool = True
         self._volume = 0
         self._is_volume_muted = False
-        self._media_position = 0
-        self._media_duration = 0
-        self._media_type = MediaType.VIDEO
-        self._media_title = ""
         self._media_image_url = ""
-        self._media_artist = ""
-        self._media_album = ""
         self._image_cache = None
 
         self._websocket_task = None
@@ -305,26 +299,6 @@ class PlexDevice:
     def _reset_state(self, players=None):
         self._players = players
         self._properties = {}
-        self._media_position = None
-
-    def _reset_media_state(self) -> dict:
-        updated_data = {}
-        self._media_position = 0
-        self._media_duration = 0
-        self._media_title = ""
-        self._media_album = ""
-        self._media_artist = ""
-        self._media_image_url = ""
-        self._image_cache = None
-        updated_data["state"] = "OFF"
-        updated_data["position"] = 0
-        updated_data["duration"] = 0
-        updated_data["title"] = ""
-        updated_data["artwork"] = ""
-        updated_data["album"] = ""
-        updated_data["artist"] = ""
-        updated_data["media_type"] = ""
-        return updated_data
 
     def plex_ws_updates(self, msgtype, data, error) -> None:
         """Handle WS Messages."""
@@ -344,16 +318,16 @@ class PlexDevice:
                                 break
 
                         if payload and payload["state"] == "stopped":
-                            updated_data = self._reset_media_state()
+                            self._play_state = payload["state"]
+                            updated_data["state"] = self.get_state()
                             self._image_cache = None
                         elif payload:
                             self._play_state = payload["state"]
-                            updated_data["state"] = self._play_state
+                            updated_data["state"] = self.get_state()
                             self._is_on = True
 
                             self._view_offset = payload["viewOffset"] / 1000
                             updated_data["position"] = self._view_offset
-                            updated_data["position_updated_at"] = datetime.now(tz=UTC).isoformat()
 
                             self._session = self.get_session_by_client_id(
                                 self.device_config.identifier
@@ -361,36 +335,42 @@ class PlexDevice:
                             if self._session:
                                 self._key = payload["key"]
 
-                                self._media_duration = self._session.duration / 1000
-                                updated_data["total_time"] = self._media_duration
-
+                                updated_data["total_time"] = (
+                                    self._session.duration / 1000
+                                )
                                 updated_data["media_type"] = self._session.TYPE
 
                                 # if self._media_title != self._session.title:
                                 #     self._image_cache = None
 
-                                self._media_title = self._session.title
                                 if self._session.type == "episode":
-                                    self._media_artist = (
+                                    updated_data["artist"] = (
                                         self._session.seasonEpisode.upper()
                                     )
-                                    updated_data["artist"] = self._media_artist
-                                updated_data["title"] = self._media_title
+                                updated_data["title"] = self._session.title
 
                                 url = ""
                                 try:
                                     if self._session.type == "episode":
                                         match self._device.tv_selection:
                                             case "tv-poster-series":
-                                                url = self.build_plex_url(self._session.grandparentThumb)
+                                                url = self.build_plex_url(
+                                                    self._session.grandparentThumb
+                                                )
                                             case "tv-poster-season":
-                                                url = self.build_plex_url(self._session.parentThumb)
+                                                url = self.build_plex_url(
+                                                    self._session.parentThumb
+                                                )
                                             case "tv-poster-episode":
-                                                url = self.build_plex_url(self._session.thumb)
+                                                url = self.build_plex_url(
+                                                    self._session.thumb
+                                                )
                                             case "tv-poster-art":
                                                 url = self._session.artUrl
                                             case _:
-                                                url = self.build_plex_url(self._session.grandparentThumb)
+                                                url = self.build_plex_url(
+                                                    self._session.grandparentThumb
+                                                )
                                     else:
                                         match self._device.movie_selection:
                                             case "movie-poster":
@@ -401,7 +381,9 @@ class PlexDevice:
                                                 url = self._session.posterUrl
                                 except Exception:  # pylint: disable=broad-exception-caught
                                     if self._session.type == "episode":
-                                        url = self.build_plex_url(self._session.grandparentThumb)
+                                        url = self.build_plex_url(
+                                            self._session.grandparentThumb
+                                        )
                                     else:
                                         url = self._session.posterUrl
 
@@ -448,12 +430,10 @@ class PlexDevice:
                 self._image_cache = f"data:image/png;base64,{image}"
         return self._image_cache
 
-
     def build_plex_url(self, path: str) -> str:
         """Build a plex url from config and supplied path"""
         config = self._device
         return f"{config.address}:{config.port}{path}?X-Plex-Token={config.auth_token}"
-
 
     def get_players(self) -> list[Any, Any]:
         """Get active players from session."""
@@ -489,6 +469,9 @@ class PlexDevice:
                     self._session.player.device,
                     ex,
                 )
+        updated_data = {}
+        updated_data["state"] = self.get_state()
+        self.events.emit(Events.UPDATE, self.identifier, updated_data)
         return None
 
     # def command_button(self, button: ButtonKeymap):
@@ -498,24 +481,6 @@ class PlexDevice:
     # def command_action(self, command: str):
     #     """Send custom command."""
     #     self._client.sendCommand(command)
-
-    @property
-    def attributes(self) -> dict[str, any]:
-        """Return the device attributes."""
-        attributes = {
-            MediaAttr.STATE: PLEX_STATE_MAPPING[self.get_state()],
-            MediaAttr.MUTED: self.is_volume_muted,
-            MediaAttr.MEDIA_TYPE: self.media_type,
-            MediaAttr.MEDIA_IMAGE_URL: (
-                self.media_image_url if self.media_image_url else ""
-            ),
-            MediaAttr.MEDIA_TITLE: self.media_title if self.media_title else "",
-            MediaAttr.MEDIA_ALBUM: self.media_album if self.media_album else "",
-            MediaAttr.MEDIA_ARTIST: self.media_artist if self.media_artist else "",
-            MediaAttr.MEDIA_POSITION: self.media_position,
-            MediaAttr.MEDIA_DURATION: self.media_duration,
-        }
-        return attributes
 
     @property
     def name(self) -> str:
@@ -575,16 +540,6 @@ class PlexDevice:
         return self._supported_features
 
     @property
-    def media_position(self):
-        """Return current media position."""
-        return self._media_position
-
-    @property
-    def media_duration(self):
-        """Return current media duration."""
-        return self._media_duration
-
-    @property
     def is_volume_muted(self) -> bool:
         """Return boolean if volume is currently muted."""
         return self._is_volume_muted
@@ -598,26 +553,6 @@ class PlexDevice:
     def media_image_url(self) -> str:
         """Image url of current playing media."""
         return self._media_image_url
-
-    @property
-    def media_title(self) -> str:
-        """Title of current playing media."""
-        return self._media_title
-
-    @property
-    def media_album(self) -> str:
-        """Title of current playing media."""
-        return self._media_album
-
-    @property
-    def media_artist(self) -> str:
-        """Title of current playing media."""
-        return self._media_artist
-
-    @property
-    def media_type(self) -> MediaType:
-        """Return current media type."""
-        return self._media_type
 
     @property
     def client(self) -> PlexClient:
