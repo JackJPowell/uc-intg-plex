@@ -354,7 +354,7 @@ class PlexDevice:
 
                             self._view_offset = payload["viewOffset"] / 1000
                             updated_data["position"] = self._view_offset
-                            updated_data["media_position_updated_at"] = datetime.now(tz=UTC).isoformat()
+                            updated_data["position_updated_at"] = datetime.now(tz=UTC).isoformat()
 
                             self._session = self.get_session_by_client_id(
                                 self.device_config.identifier
