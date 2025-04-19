@@ -72,9 +72,9 @@ class PlexMediaPlayer(MediaPlayer):
                 self._device._is_volume_muted = False
                 self._device._volume = params.get("volume")
             elif cmd_id == Commands.PLAY_PAUSE or cmd_id == Commands.CURSOR_ENTER:
-                if self._device._play_state == "playing":
+                if self._device.play_state == "playing":
                     client.pause()
-                elif self._device._play_state == "paused":
+                elif self._device.play_state == "paused":
                     client.play()
             elif cmd_id == Commands.MUTE:
                 client.setVolume(0)

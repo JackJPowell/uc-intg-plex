@@ -92,8 +92,6 @@ class PlexDevice:
         self._play_state = None
         self._key = None
         self._view_offset = None
-        self._attr_state = "OFF"
-        self._previous_state = "OFF"
         self._players: list[Any, Any] = None
         self._session: MediaContainer = None
         self._client: PlexClient = None
@@ -139,7 +137,12 @@ class PlexDevice:
         self._session = self.get_session_by_client_id(self.device_config.identifier)
         if self._session:
             self._client = self.get_plex_client()
-            self._attr_state = "ON"
+            if self._client:
+                self._is_on = True
+            else:
+                self.is_on = False
+        else:
+            self._is_on = False
 
         _LOG.debug(self._plex_connection.state)
 
@@ -166,11 +169,13 @@ class PlexDevice:
             return States.PAUSED
         if self._play_state == "playing":
             return States.PLAYING
-        if self.plex_is_off:
+        if self._play_state == "stopped":
             return States.OFF
+        if self.is_on:
+            return States.ON
         if self._no_active_players:
             return States.IDLE
-        return States.ON
+        return States.OFF
 
     async def _clear_connection(self, close=True):
         self._reset_state()
@@ -284,8 +289,6 @@ class PlexDevice:
                 self._websocket_task.cancel()
             if self._plex_connection:
                 self._plex_connection.close()
-            self._previous_state = self._attr_state
-            self._attr_state = States.OFF
         except Exception as error:  # pylint: disable=broad-exception-caught
             _LOG.error(
                 "Logout to %s failed: [%s]",
@@ -318,13 +321,14 @@ class PlexDevice:
                                 break
 
                         if payload and payload["state"] == "stopped":
-                            self._play_state = payload["state"]
-                            updated_data["state"] = self.get_state()
                             self._image_cache = None
-                        elif payload:
+                            self._is_on = False
                             self._play_state = payload["state"]
                             updated_data["state"] = self.get_state()
+                        elif payload:
                             self._is_on = True
+                            self._play_state = payload["state"]
+                            updated_data["state"] = self.get_state()
 
                             self._view_offset = payload["viewOffset"] / 1000
                             updated_data["position"] = self._view_offset
@@ -504,10 +508,17 @@ class PlexDevice:
     def is_on(self) -> bool | None:
         """Whether the Apple TV is on or off. Returns None if not connected."""
         if self._plex is None:
-            return None
-        if self._play_state:
+            return False
+        if self._play_state in ["playing", "paused", "seeking", "buffering"]:
             self._is_on = True
         return self._is_on
+
+    @property
+    def play_state(self) -> str | None:
+        """Return the play state of the device."""
+        if self._play_state is None:
+            return None
+        return self._play_state
 
     @property
     def device_config(self) -> PlexConfigDevice:
@@ -518,11 +529,6 @@ class PlexDevice:
     def host(self) -> str:
         """Return the host of the device as string."""
         return self._device.identifier
-
-    @property
-    def plex_is_off(self):
-        """Signals if plex client is on or off."""
-        return self._client is None
 
     @property
     def _no_active_players(self):
