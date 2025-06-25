@@ -24,7 +24,7 @@ Supported attributes:
 The simpliest way to get started is by uploading this integration to your unfolded circle remote. You'll find the option on the integration tab in the web configurator. Simply upload the .tar.gz file attached to the release. This option is nice and doesn't require a separate docker instance to host the package. However, upgrading is a fully manual process. To help with this, a docker image is also provided that allows you to run it externally from the remote and easily upgrade when new versions are released. 
 
 ### Docker
-```docker run -d --name=uc-intg-plex -p 9090:9090 --restart unless-stopped ghcr.io/jackjpowell/uc-intg-plex:latest```
+```docker run -d --name=uc-intg-plex --network host -v </local/path>:/config --restart unless-stopped ghcr.io/jackjpowell/uc-intg-plex:latest```
 
 ### Docker Compose
 ```
@@ -32,7 +32,8 @@ services:
   uc-intg-plex:
     image: ghcr.io/jackjpowell/uc-intg-plex:latest
     container_name: uc-intg-plex
-    ports:
-      - 9090:9090
+    network: host
+    volumes:
+      - </local/path>:/config
     restart: unless-stopped
 ```
