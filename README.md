@@ -32,7 +32,7 @@ services:
   uc-intg-plex:
     image: ghcr.io/jackjpowell/uc-intg-plex:latest
     container_name: uc-intg-plex
-    network: host
+    network_mode: host
     volumes:
       - </local/path>:/config
     restart: unless-stopped
