@@ -1,3 +1,9 @@
+[![Discord](https://badgen.net/discord/online-members/zGVYf58)](https://discord.gg/zGVYf58)
+![GitHub Release](https://img.shields.io/github/v/release/jackjpowell/uc-intg-plex)
+![GitHub Downloads (all assets, all releases)](https://img.shields.io/github/downloads/jackjpowell/uc-intg-plex/total)
+<a href="#"><img src="https://img.shields.io/maintenance/yes/2025.svg"></a>
+[![Buy Me A Coffee](https://img.shields.io/badge/Buy_Me_A_Coffee&nbsp;☕-FFDD00?logo=buy-me-a-coffee&logoColor=white&labelColor=grey)](https://buymeacoffee.com/jackpowell)
+
 # Plex integration for Unfolded Circle Remotes
 
 Using [uc-integration-api](https://github.com/aitatoi/integration-python-library)
