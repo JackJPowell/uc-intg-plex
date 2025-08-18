@@ -234,11 +234,11 @@ async def on_device_update(device_id: str, update: dict[str, Any] | None) -> Non
 
         attributes[ucapi.media_player.Attributes.MEDIA_TYPE] = media_type
 
+    # FIXED: Handle OFF state properly - don't override artwork if it was provided
     if "state" in update and update["state"] == plex.States.OFF:
-        attributes[ucapi.media_player.Attributes.STATE] = (
-            _plex_state_to_media_player_state(update["state"])
-        )
-        attributes[ucapi.media_player.Attributes.MEDIA_IMAGE_URL] = ""
+        # Only clear media fields if NO artwork was provided (meaning no Plex logo fallback)
+        if "artwork" not in update:
+            attributes[ucapi.media_player.Attributes.MEDIA_IMAGE_URL] = ""
         attributes[ucapi.media_player.Attributes.MEDIA_ALBUM] = ""
         attributes[ucapi.media_player.Attributes.MEDIA_ARTIST] = ""
         attributes[ucapi.media_player.Attributes.MEDIA_TITLE] = ""
