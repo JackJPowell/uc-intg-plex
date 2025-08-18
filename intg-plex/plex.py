@@ -443,13 +443,15 @@ class PlexDevice:
                             self._play_state = payload["state"]
                             updated_data["state"] = self.get_state()
                             
-                            # NEW: Set Plex logo when nothing is playing
+                            # FIXED: Set Plex logo when nothing is playing
                             plex_logo = self._get_plex_logo()
                             if plex_logo:
-                                updated_data["artwork"] = plex_logo
+                                self._media_image_url = plex_logo  # Set the instance variable
+                                updated_data["media_image_url"] = plex_logo  # Set in update data
                                 _LOG.debug("Using Plex logo for idle state")
                             else:
-                                updated_data["artwork"] = ""
+                                self._media_image_url = ""
+                                updated_data["media_image_url"] = ""
                                 _LOG.debug("No Plex logo available, using empty image")
                                 
                         elif payload:
@@ -518,18 +520,19 @@ class PlexDevice:
                                     else:
                                         url = self._session.posterUrl
 
-                                # NEW: Use live API image when actively playing
+                                # FIXED: Use live API image when actively playing
                                 self._media_image_url = self.store_image_as_base64(
                                     url, 400
                                 )
-                                updated_data["artwork"] = self._media_image_url
+                                updated_data["media_image_url"] = self._media_image_url  # Changed from "artwork"
                                 _LOG.debug("Using live API image for active playback")
 
-        # NEW: Handle case when transitioning to idle/off state without active session
-        if updated_data.get("state") in [States.OFF, States.IDLE] and "artwork" not in updated_data:
+        # FIXED: Handle case when transitioning to idle/off state without active session
+        if updated_data.get("state") in [States.OFF, States.IDLE] and "media_image_url" not in updated_data:
             plex_logo = self._get_plex_logo()
             if plex_logo:
-                updated_data["artwork"] = plex_logo
+                self._media_image_url = plex_logo
+                updated_data["media_image_url"] = plex_logo
                 _LOG.debug("Using Plex logo for idle/off state")
 
         if updated_data:
