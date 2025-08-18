@@ -57,6 +57,13 @@ jobs:
           mv dist/intg-${{ env.DRIVER_ID }}/* artifacts/bin
           mv artifacts/bin/intg-${{ env.DRIVER_ID }} artifacts/bin/driver
           cp driver.json artifacts/
+          # Copy the cache directory with fallback images
+          if [ -d "cache" ]; then
+            cp -r cache artifacts/
+            echo "Copied cache directory to artifacts"
+          else
+            echo "Warning: cache directory not found"
+          fi
           echo "ARTIFACT_NAME=uc-intg-${{ env.DRIVER_ID }}-${{ env.VERSION }}-aarch64" >> $GITHUB_ENV
           
       - name: Create upload artifact archive
