@@ -136,39 +136,7 @@ class PlexDevice:
     def _load_plex_logo(self):
         """Load the Plex logo image and cache it as base64."""
         try:
-            # Add extensive debugging
-            _LOG.debug("=== PLEX LOGO DEBUG START ===")
-            _LOG.debug("Current working directory: %s", os.getcwd())
-            _LOG.debug("__file__ path: %s", __file__)
-            _LOG.debug("dirname(__file__): %s", os.path.dirname(__file__))
-            _LOG.debug("dirname(dirname(__file__)): %s", os.path.dirname(os.path.dirname(__file__)))
-            _LOG.debug("CACHE_DIR constant: %s", CACHE_DIR)
-            _LOG.debug("PLEX_LOGO_FILENAME constant: %s", PLEX_LOGO_FILENAME)
-            _LOG.debug("Calculated cache dir: %s", self._cache_dir)
-            _LOG.debug("Calculated plex logo path: %s", self._plex_logo_path)
-            _LOG.debug("Cache dir exists: %s", os.path.exists(self._cache_dir))
-            _LOG.debug("Plex logo file exists: %s", os.path.exists(self._plex_logo_path))
-            
-            # List contents of various directories
-            try:
-                _LOG.debug("Contents of current working directory (%s):", os.getcwd())
-                for item in os.listdir(os.getcwd()):
-                    _LOG.debug("  %s", item)
-            except Exception as ex:
-                _LOG.debug("Could not list cwd: %s", ex)
-                
-            # Check if cache dir exists and list its contents
-            try:
-                if os.path.exists(self._cache_dir):
-                    _LOG.debug("Contents of cache directory (%s):", self._cache_dir)
-                    for item in os.listdir(self._cache_dir):
-                        _LOG.debug("  %s", item)
-                else:
-                    _LOG.debug("Cache directory does not exist: %s", self._cache_dir)
-            except Exception as ex:
-                _LOG.debug("Could not list cache dir: %s", ex)
-            
-            # Try alternative paths
+            # Try alternative paths to find the logo
             alt_paths = [
                 os.path.join(os.getcwd(), CACHE_DIR, PLEX_LOGO_FILENAME),
                 os.path.join(os.path.dirname(__file__), "..", CACHE_DIR, PLEX_LOGO_FILENAME),
@@ -178,20 +146,13 @@ class PlexDevice:
                 os.path.join(CACHE_DIR, PLEX_LOGO_FILENAME)  # Relative path
             ]
             
-            _LOG.debug("Trying alternative paths:")
             for i, alt_path in enumerate(alt_paths):
-                abs_path = os.path.abspath(alt_path)
-                exists = os.path.exists(alt_path)
-                _LOG.debug("Path %d: %s -> %s (exists: %s)", i+1, alt_path, abs_path, exists)
-                if exists:
-                    _LOG.debug("*** FOUND LOGO AT: %s ***", alt_path)
+                if os.path.exists(alt_path):
+                    _LOG.debug("Found Plex logo at: %s", alt_path)
                     self._plex_logo_path = alt_path
                     break
-            
-            _LOG.debug("=== PLEX LOGO DEBUG END ===")
-
-            if not os.path.exists(self._plex_logo_path):
-                _LOG.debug("Plex logo not found at final path: %s", self._plex_logo_path)
+            else:
+                _LOG.debug("Plex logo not found in any standard location")
                 return
 
             with open(self._plex_logo_path, 'rb') as f:
@@ -443,15 +404,15 @@ class PlexDevice:
                             self._play_state = payload["state"]
                             updated_data["state"] = self.get_state()
                             
-                            # FIXED: Set Plex logo when nothing is playing
+                            # Set Plex logo when nothing is playing
                             plex_logo = self._get_plex_logo()
                             if plex_logo:
                                 self._media_image_url = plex_logo  # Set the instance variable
-                                updated_data["media_image_url"] = plex_logo  # Set in update data
+                                updated_data["artwork"] = plex_logo  # Use "artwork" for driver compatibility
                                 _LOG.debug("Using Plex logo for idle state")
                             else:
                                 self._media_image_url = ""
-                                updated_data["media_image_url"] = ""
+                                updated_data["artwork"] = ""
                                 _LOG.debug("No Plex logo available, using empty image")
                                 
                         elif payload:
@@ -520,19 +481,19 @@ class PlexDevice:
                                     else:
                                         url = self._session.posterUrl
 
-                                # FIXED: Use live API image when actively playing
+                                # Use live API image when actively playing
                                 self._media_image_url = self.store_image_as_base64(
                                     url, 400
                                 )
-                                updated_data["media_image_url"] = self._media_image_url  # Changed from "artwork"
+                                updated_data["artwork"] = self._media_image_url  # Use "artwork" for driver compatibility
                                 _LOG.debug("Using live API image for active playback")
 
-        # FIXED: Handle case when transitioning to idle/off state without active session
-        if updated_data.get("state") in [States.OFF, States.IDLE] and "media_image_url" not in updated_data:
+        # Handle case when transitioning to idle/off state without active session
+        if updated_data.get("state") in [States.OFF, States.IDLE] and "artwork" not in updated_data:
             plex_logo = self._get_plex_logo()
             if plex_logo:
                 self._media_image_url = plex_logo
-                updated_data["media_image_url"] = plex_logo
+                updated_data["artwork"] = plex_logo
                 _LOG.debug("Using Plex logo for idle/off state")
 
         if updated_data:
