@@ -1,6 +1,6 @@
 {
 	"driver_id": "plex_driver",
-	"version": "0.3.5",
+	"version": "0.3.6",
 	"min_core_api": "0.20.0",
 	"name": { "en": "Plex" },
 	"icon": "uc:display",

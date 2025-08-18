@@ -48,7 +48,10 @@ jobs:
             bash -c \
             "cd /workspace && \
               python -m pip install -r requirements.txt && \
-              pyinstaller --clean --onedir --name intg-${DRIVER_ID} --collect-all zeroconf intg-${INTG_NAME}/driver.py"
+              pyinstaller --clean --onedir --name intg-${DRIVER_ID} \
+                --add-data cache:cache \
+                --collect-all zeroconf \
+                intg-${INTG_NAME}/driver.py"
 
       - name: Prepare artifacts
         shell: bash
@@ -57,13 +60,6 @@ jobs:
           mv dist/intg-${{ env.DRIVER_ID }}/* artifacts/bin
           mv artifacts/bin/intg-${{ env.DRIVER_ID }} artifacts/bin/driver
           cp driver.json artifacts/
-          # Copy the cache directory with fallback images
-          if [ -d "cache" ]; then
-            cp -r cache artifacts/
-            echo "Copied cache directory to artifacts"
-          else
-            echo "Warning: cache directory not found"
-          fi
           echo "ARTIFACT_NAME=uc-intg-${{ env.DRIVER_ID }}-${{ env.VERSION }}-aarch64" >> $GITHUB_ENV
           
       - name: Create upload artifact archive
