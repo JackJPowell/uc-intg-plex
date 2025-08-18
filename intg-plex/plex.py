@@ -114,7 +114,7 @@ class PlexDevice:
         self._properties = {}
 
         # Initialize cache directory and logo
-        self._cache_dir = os.path.join(os.path.dirname(__file__), CACHE_DIR)
+        self._cache_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), CACHE_DIR)
         self._plex_logo_path = os.path.join(self._cache_dir, PLEX_LOGO_FILENAME)
         self._ensure_cache_directory()
         self._load_plex_logo()
