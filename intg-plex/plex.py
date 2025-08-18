@@ -8,6 +8,7 @@ import asyncio
 import base64
 import io
 import logging
+import os
 from asyncio import AbstractEventLoop, Future, Lock, shield
 from enum import IntEnum
 from io import BytesIO
@@ -33,6 +34,8 @@ _LOG = logging.getLogger(__name__)
 DEFAULT_TIMEOUT = 8.0
 WEBSOCKET_WATCHDOG_INTERVAL = 10
 CONNECTION_RETRIES = 10
+CACHE_DIR = "cache"  # Cache directory for fallback images
+PLEX_LOGO_FILENAME = "plex_logo.png"  # Specific logo file name
 
 
 class Events(IntEnum):
@@ -103,16 +106,76 @@ class PlexDevice:
         self._is_volume_muted = False
         self._media_image_url = ""
         self._image_cache = None
+        self._plex_logo_cache = None  # Cache for Plex logo
 
         self._websocket_task = None
         self._connect_lock = Lock()
         self._reconnect_retry = 0
         self._properties = {}
 
+        # Initialize cache directory and logo
+        self._cache_dir = os.path.join(os.path.dirname(__file__), CACHE_DIR)
+        self._plex_logo_path = os.path.join(self._cache_dir, PLEX_LOGO_FILENAME)
+        self._ensure_cache_directory()
+        self._load_plex_logo()
+
         _LOG.debug("Plex instance created: %s", device_config.identifier)
         self.event_loop.create_task(self.init_connection())
 
         self._connection_status: Future | None = None
+
+    def _ensure_cache_directory(self):
+        """Ensure the cache directory exists."""
+        try:
+            if not os.path.exists(self._cache_dir):
+                os.makedirs(self._cache_dir)
+                _LOG.debug("Created cache directory: %s", self._cache_dir)
+        except OSError as ex:
+            _LOG.warning("Could not create cache directory %s: %s", self._cache_dir, ex)
+
+    def _load_plex_logo(self):
+        """Load the Plex logo image and cache it as base64."""
+        try:
+            if not os.path.exists(self._plex_logo_path):
+                _LOG.debug("Plex logo not found at: %s", self._plex_logo_path)
+                return
+
+            with open(self._plex_logo_path, 'rb') as f:
+                image_data = f.read()
+
+            image = Image.open(BytesIO(image_data))
+            
+            # Resize if needed (same logic as store_image_as_base64)
+            width, height = image.size
+            max_size = 400
+            
+            if max_size < max(width, height):
+                if width > height:
+                    new_width = max_size
+                    new_height = int(height * (max_size / width))
+                else:
+                    new_height = max_size
+                    new_width = int(width * (max_size / height))
+
+                image = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
+
+            # Convert to base64
+            byte_image = io.BytesIO()
+            image.save(byte_image, format="PNG")
+            byte_image = byte_image.getvalue()
+
+            logo_image = base64.b64encode(byte_image).decode("utf-8")
+            self._plex_logo_cache = f"data:image/png;base64,{logo_image}"
+            
+            _LOG.debug("Loaded Plex logo from cache: %s", self._plex_logo_path)
+            
+        except Exception as ex:
+            _LOG.warning("Could not load Plex logo from %s: %s", self._plex_logo_path, ex)
+            self._plex_logo_cache = None
+
+    def _get_plex_logo(self) -> str | None:
+        """Get the Plex logo image as base64."""
+        return self._plex_logo_cache
 
     async def init_connection(self):
         """Initialize connection to device."""
@@ -325,6 +388,16 @@ class PlexDevice:
                             self._is_on = False
                             self._play_state = payload["state"]
                             updated_data["state"] = self.get_state()
+                            
+                            # NEW: Set Plex logo when nothing is playing
+                            plex_logo = self._get_plex_logo()
+                            if plex_logo:
+                                updated_data["artwork"] = plex_logo
+                                _LOG.debug("Using Plex logo for idle state")
+                            else:
+                                updated_data["artwork"] = ""
+                                _LOG.debug("No Plex logo available, using empty image")
+                                
                         elif payload:
                             self._is_on = True
                             self._play_state = payload["state"]
@@ -391,11 +464,19 @@ class PlexDevice:
                                     else:
                                         url = self._session.posterUrl
 
+                                # NEW: Use live API image when actively playing
                                 self._media_image_url = self.store_image_as_base64(
                                     url, 400
                                 )
-
                                 updated_data["artwork"] = self._media_image_url
+                                _LOG.debug("Using live API image for active playback")
+
+        # NEW: Handle case when transitioning to idle/off state without active session
+        if updated_data.get("state") in [States.OFF, States.IDLE] and "artwork" not in updated_data:
+            plex_logo = self._get_plex_logo()
+            if plex_logo:
+                updated_data["artwork"] = plex_logo
+                _LOG.debug("Using Plex logo for idle/off state")
 
         if updated_data:
             self.events.emit(Events.UPDATE, self.identifier, updated_data)
