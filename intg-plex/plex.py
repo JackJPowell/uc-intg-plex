@@ -404,6 +404,14 @@ class PlexDevice:
                             self._play_state = payload["state"]
                             updated_data["state"] = self.get_state()
                             
+                            # FIXED: Always clear text fields when stopped
+                            updated_data["title"] = ""
+                            updated_data["artist"] = ""
+                            updated_data["album"] = ""
+                            updated_data["position"] = 0
+                            updated_data["total_time"] = 0
+                            updated_data["media_type"] = ""
+                            
                             # Set Plex logo when nothing is playing
                             plex_logo = self._get_plex_logo()
                             if plex_logo:
@@ -414,7 +422,7 @@ class PlexDevice:
                                 self._media_image_url = ""
                                 updated_data["artwork"] = ""
                                 _LOG.debug("No Plex logo available, using empty image")
-                                
+
                         elif payload:
                             self._is_on = True
                             self._play_state = payload["state"]
@@ -460,19 +468,20 @@ class PlexDevice:
                                                     self._session.thumb
                                                 )
                                             case "tv-poster-art":
-                                                url = self._session.artUrl
-                                            case _:
                                                 url = self.build_plex_url(
-                                                    self._session.grandparentThumb
+                                                    self._session.grandparentArt
                                                 )
                                     else:
                                         match self._device.movie_selection:
                                             case "movie-poster":
-                                                url = self._session.posterUrl
+                                                url = self.build_plex_url(
+                                                    self._session.thumb
+                                                )
                                             case "movie-art":
-                                                url = self._session.artUrl
-                                            case _:
-                                                url = self._session.posterUrl
+                                                url = self.build_plex_url(
+                                                    self._session.art
+                                                )
+                                    url = self._session.posterUrl
                                 except Exception:  # pylint: disable=broad-exception-caught
                                     if self._session.type == "episode":
                                         url = self.build_plex_url(
@@ -496,8 +505,12 @@ class PlexDevice:
                 updated_data["artwork"] = plex_logo
                 _LOG.debug("Using Plex logo for idle/off state")
 
+        # FIXED: Ensure we always emit an event with valid data
         if updated_data:
+            _LOG.debug("Emitting update with data: %s", updated_data.keys())
             self.events.emit(Events.UPDATE, self.identifier, updated_data)
+        else:
+            _LOG.debug("No data to emit")
 
         if error:
             _LOG.debug(error)
@@ -576,14 +589,6 @@ class PlexDevice:
         updated_data["state"] = self.get_state()
         self.events.emit(Events.UPDATE, self.identifier, updated_data)
         return None
-
-    # def command_button(self, button: ButtonKeymap):
-    #     """Call a button command."""
-    #     self._client.sendCommand(button.get("keymap"))
-
-    # def command_action(self, command: str):
-    #     """Send custom command."""
-    #     self._client.sendCommand(command)
 
     @property
     def name(self) -> str:
