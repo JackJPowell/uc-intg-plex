@@ -25,8 +25,11 @@ do
       exit 1
     fi
 
+    # Normalize: strip leading 'v' from tag
+    normalized_tag="${tag_name#v}"
+
     # Check that tag matches version
-    if [[ "$tag_name" != "$driver_version" ]]; then
+    if [[ "$normalized_tag" != "$driver_version" ]]; then
       echo "❌ Tag ($tag_name) does not match version ($driver_version) in driver.json/pyproject.toml."
       exit 1
     fi
