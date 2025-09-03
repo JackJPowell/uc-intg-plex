@@ -1,9 +1,10 @@
-# Manual triggered GitHub action to build a distribution binary of the Python integration driver and attach it to a release draft including a hash file
----
+# Triggered by version tag creation to build a distribution binary, Docker image, and create a release draft
 name: "Build & Draft Release"
 
-on:
-  workflow_dispatch:
+"on":
+  push:
+    tags:
+      - 'v*'
 
 env:
   INTG_NAME: plex
@@ -29,10 +30,12 @@ jobs:
         #Id needed for env output variable
         id: get-version-and-id
         run: |
-          echo "VERSION=$(jq .version -r driver.json)" >> $GITHUB_ENV
+          # Extract version from git tag (remove 'v' prefix)
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
           echo "DRIVER_ID=$(jq .driver_id -r driver.json)" >> $GITHUB_ENV
           # Save to Github output to later use it in Create Release job
-          echo "VERSION=$(jq .version -r driver.json)" >> $GITHUB_OUTPUT
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
           echo "DRIVER_ID=$(jq .driver_id -r driver.json)" >> $GITHUB_OUTPUT
 
       - name: Build
@@ -73,10 +76,49 @@ jobs:
           if-no-files-found: error
           retention-days: 3
             
+  docker:
+    name: Build and Push Docker Image
+    runs-on: ubuntu-24.04
+    needs: [build]
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/uc-intg-plex
+          tags: |
+            type=ref,event=tag
+            type=raw,value=latest
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+            
   release:
     name: Create Release
     runs-on: ubuntu-24.04
-    needs: [build]
+    needs: [build, docker]
     permissions:
       contents: write
 
