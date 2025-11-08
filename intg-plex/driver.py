@@ -247,7 +247,11 @@ async def on_device_update(device_id: str, update: dict[str, Any] | None) -> Non
         attributes[ucapi.media_player.Attributes.MEDIA_DURATION] = 0
 
     if attributes:
-        _LOG.info("on_device_update: %s %s", device_id, ucapi.api.filter_log_msg_data(attributes))
+        _LOG.info(
+            "on_device_update: %s %s",
+            device_id,
+            ucapi.api.filter_log_msg_data(attributes),
+        )
         if api.configured_entities.contains(device_id):
             api.configured_entities.update_attributes(device_id, attributes)
         else:

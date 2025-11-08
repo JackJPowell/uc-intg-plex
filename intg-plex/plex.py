@@ -13,8 +13,8 @@ from asyncio import AbstractEventLoop, Future, Lock, shield
 from enum import IntEnum
 from io import BytesIO
 from typing import Any, ParamSpec, TypeVar
-from urllib.request import urlopen
 
+import aiohttp
 from config import PlexConfigDevice
 from const import PLEX_FEATURES
 from PIL import Image
@@ -107,11 +107,13 @@ class PlexDevice:
         self._media_image_url = ""
         self._image_cache = None
         self._plex_logo_cache = None  # Cache for Plex logo
+        self._image_cache_url = None
 
         self._websocket_task = None
         self._connect_lock = Lock()
         self._reconnect_retry = 0
         self._properties = {}
+        self._http_session: aiohttp.ClientSession | None = None
 
         # Initialize cache directory and logo
         self._cache_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), CACHE_DIR)
@@ -197,10 +199,13 @@ class PlexDevice:
         if self._plex_connection:
             try:
                 await self._plex_connection.close()
-            except Exception:  # pylint: disable=broad-exception-caught
+            except Exception:
                 pass
             finally:
                 self._plex_connection = None
+
+        if self._client:
+            self._client = None
 
         self.events.emit(Events.CONNECTING, self.identifier)
         self._plex = self.get_plex_server()
@@ -210,19 +215,36 @@ class PlexDevice:
             callback=self.plex_ws_updates,
             subscriptions=["playing", "status", "progress"],
         )
+
+        # Start listening but don't block
         self.event_loop.create_task(self._plex_connection.listen())
-        self._plex_connection.state = STATE_CONNECTED
-        self._session = self.get_session_by_client_id(self.device_config.identifier)
+
+        # Give websocket time to connect (with timeout)
+        try:
+            await asyncio.wait_for(self._wait_for_websocket_connection(), timeout=5.0)
+        except asyncio.TimeoutError:
+            _LOG.warning("Websocket connection timeout for %s", self.identifier)
+
+        # Get initial session state asynchronously
+        await self._update_session_state()
+
+        _LOG.debug("Websocket state: %s", self._plex_connection.state)
+
+    async def _wait_for_websocket_connection(self):
+        """Wait for websocket to connect."""
+        while self._plex_connection.state != STATE_CONNECTED:
+            await asyncio.sleep(0.1)
+
+    async def _update_session_state(self):
+        """Update session state asynchronously."""
+        self._session = await self.event_loop.run_in_executor(
+            None, self.get_session_by_client_id, self.device_config.identifier
+        )
         if self._session:
             self._client = self.get_plex_client()
-            if self._client:
-                self._is_on = True
-            else:
-                self.is_on = False
+            self._is_on = self._client is not None
         else:
             self._is_on = False
-
-        _LOG.debug(self._plex_connection.state)
 
     def get_plex_server(self) -> PlexServer:
         """Get a reference to the PMS."""
@@ -257,11 +279,24 @@ class PlexDevice:
 
     async def _clear_connection(self, close=True):
         self._reset_state()
-        if close:
+        if close and self._plex_connection:
             try:
                 await self._plex_connection.close()
             except Exception:  # pylint: disable=broad-exception-caught
                 pass
+            finally:
+                self._plex_connection = None
+        # Clear client reference
+        if self._client:
+            self._client = None
+        # Clear HTTP session
+        if self._http_session and not self._http_session.closed:
+            try:
+                await self._http_session.close()
+            except Exception:  # pylint: disable=broad-exception-caught
+                pass
+            finally:
+                self._http_session = None
 
     async def _reconnect_websocket_if_disconnected(self, *_) -> bool:
         """Reconnect the websocket if it fails."""
@@ -365,8 +400,19 @@ class PlexDevice:
         try:
             if self._websocket_task:
                 self._websocket_task.cancel()
+                try:
+                    await self._websocket_task
+                except asyncio.CancelledError:
+                    pass
             if self._plex_connection:
-                self._plex_connection.close()
+                await self._plex_connection.close()
+            # Explicitly clear client reference to close any proxy connections
+            if self._client:
+                self._client = None
+            # Close HTTP session
+            if self._http_session and not self._http_session.closed:
+                await self._http_session.close()
+                self._http_session = None
         except Exception as error:  # pylint: disable=broad-exception-caught
             _LOG.error(
                 "Logout to %s failed: [%s]",
@@ -376,10 +422,13 @@ class PlexDevice:
             # self._available = False
         finally:
             self._websocket_task = None
+            self._plex_connection = None
 
     def _reset_state(self, players=None):
         self._players = players
         self._properties = {}
+        # Clear image cache to free memory
+        self._image_cache = None
 
     def plex_ws_updates(self, msgtype, data, error) -> None:
         """Handle WS Messages."""
@@ -426,28 +475,21 @@ class PlexDevice:
                         elif payload:
                             self._is_on = True
                             self._play_state = payload["state"]
-                            updated_data["state"] = self.get_state()
 
-                            self._view_offset = payload["viewOffset"] / 1000
-                            updated_data["position"] = self._view_offset
+                            if payload["state"] == "stopped":
+                                self._image_cache = None
+                                self._is_on = False
+                                updated_data["state"] = self.get_state()
+                            else:
+                                self._is_on = True
+                                updated_data["state"] = self.get_state()
+                                self._view_offset = payload["viewOffset"] / 1000
+                                updated_data["position"] = self._view_offset
 
-                            self._session = self.get_session_by_client_id(
-                                self.device_config.identifier
-                            )
-                            if self._session:
-                                self._key = payload["key"]
-
-                                updated_data["total_time"] = (
-                                    self._session.duration / 1000
-                                )
-                                updated_data["media_type"] = self._session.TYPE
-
-                                # if self._media_title != self._session.title:
-                                #     self._image_cache = None
-
-                                if self._session.type == "episode":
-                                    updated_data["artist"] = (
-                                        self._session.seasonEpisode.upper()
+                                # Fetch full session details asynchronously
+                                asyncio.create_task(
+                                    self._fetch_session_details(
+                                        payload, self.identifier
                                     )
                                 updated_data["title"] = self._session.title
 
@@ -515,35 +557,128 @@ class PlexDevice:
         if error:
             _LOG.debug(error)
 
-    def store_image_as_base64(self, url, max_size):
+    async def _fetch_session_details(self, payload: dict, identifier: str):
+        """Fetch full session details asynchronously without blocking websocket."""
+        try:
+            # Run blocking call in executor
+            session = await self.event_loop.run_in_executor(
+                None, self.get_session_by_client_id, self.device_config.identifier
+            )
+
+            if not session:
+                return
+
+            self._session = session
+            self._key = payload["key"]
+
+            updated_data = {
+                "total_time": session.duration / 1000,
+                "media_type": session.TYPE,
+                "title": session.title,
+            }
+
+            if session.type == "episode":
+                updated_data["artist"] = session.seasonEpisode.upper()
+
+            # Get artwork URL
+            url = self._get_artwork_url(session)
+
+            # Fetch image asynchronously
+            asyncio.create_task(self._fetch_and_update_image(url, identifier))
+
+            # Send immediate update with available data
+            self.events.emit(Events.UPDATE, identifier, updated_data)
+
+        except Exception as ex:
+            _LOG.error("Failed to fetch session details: %s", ex)
+
+    def _get_artwork_url(self, session) -> str:
+        """Get artwork URL based on configuration."""
+        try:
+            if session.type == "episode":
+                match self._device.tv_selection:
+                    case "tv-poster-series":
+                        return self.build_plex_url(session.grandparentThumb)
+                    case "tv-poster-season":
+                        return self.build_plex_url(session.parentThumb)
+                    case "tv-poster-episode":
+                        return self.build_plex_url(session.thumb)
+                    case "tv-poster-art":
+                        return session.artUrl
+                    case _:
+                        return self.build_plex_url(session.grandparentThumb)
+            else:
+                match self._device.movie_selection:
+                    case "movie-poster":
+                        return session.posterUrl
+                    case "movie-art":
+                        return session.artUrl
+                    case _:
+                        return session.posterUrl
+        except Exception:
+            if session.type == "episode":
+                return self.build_plex_url(session.grandparentThumb)
+            else:
+                return session.posterUrl
+
+    async def _fetch_and_update_image(self, url: str, identifier: str):
+        """Fetch image asynchronously and emit update event."""
+        try:
+            image_data = await self.store_image_as_base64(url, 400)
+            if image_data:
+                self._media_image_url = image_data
+                # Emit update with the new artwork
+                self.events.emit(Events.UPDATE, identifier, {"artwork": image_data})
+        except Exception as ex:  # pylint: disable=broad-exception-caught
+            _LOG.error("Failed to fetch and update image: %s", ex)
+
+    async def store_image_as_base64(self, url, max_size):
         """Retrieve and store image as base64 data."""
-        if not self._image_cache:
-            with urlopen(url) as url:
-                f = url.read()
-                image = Image.open(BytesIO(f))
+        # Check if we need to fetch a new image (cache miss or different URL)
+        if not self._image_cache or self._image_cache_url != url:
+            try:
+                # Create session if it doesn't exist
+                if not self._http_session or self._http_session.closed:
+                    timeout = aiohttp.ClientTimeout(total=5)
+                    self._http_session = aiohttp.ClientSession(timeout=timeout)
 
-                width, height = image.size
+                async with self._http_session.get(url) as response:
+                    if response.status == 200:
+                        f = await response.read()
+                        image = Image.open(BytesIO(f))
 
-                if max_size >= max(width, height):
-                    return image
+                        width, height = image.size
 
-                if width > height:
-                    new_width = max_size
-                    new_height = int(height * (max_size / width))
-                else:
-                    new_height = max_size
-                    new_width = int(width * (max_size / height))
+                        if max_size >= max(width, height):
+                            byte_image = io.BytesIO()
+                            image.save(byte_image, format="PNG")
+                            byte_image = byte_image.getvalue()
+                            image_b64 = base64.b64encode(byte_image).decode("utf-8")
+                            self._image_cache = f"data:image/png;base64,{image_b64}"
+                            self._image_cache_url = url
+                            return self._image_cache
 
-                resized_image = image.resize(
-                    (new_width, new_height), Image.Resampling.LANCZOS
-                )
+                        if width > height:
+                            new_width = max_size
+                            new_height = int(height * (max_size / width))
+                        else:
+                            new_height = max_size
+                            new_width = int(width * (max_size / height))
 
-                byte_image = io.BytesIO()
-                resized_image.save(byte_image, format="PNG")
-                byte_image = byte_image.getvalue()
+                        resized_image = image.resize(
+                            (new_width, new_height), Image.Resampling.LANCZOS
+                        )
 
-                image = base64.b64encode(byte_image).decode("utf-8")
-                self._image_cache = f"data:image/png;base64,{image}"
+                        byte_image = io.BytesIO()
+                        resized_image.save(byte_image, format="PNG")
+                        byte_image = byte_image.getvalue()
+
+                        image_b64 = base64.b64encode(byte_image).decode("utf-8")
+                        self._image_cache = f"data:image/png;base64,{image_b64}"
+                        self._image_cache_url = url
+            except Exception as ex:  # pylint: disable=broad-exception-caught
+                _LOG.error("Failed to fetch image from %s: %s", url, ex)
+                return ""
         return self._image_cache
 
     def build_plex_url(self, path: str) -> str:
@@ -670,6 +805,16 @@ class PlexDevice:
         if not self._client:
             self._client = self.get_plex_client()
         return self._client
+
+    def __del__(self):
+        """Cleanup when object is destroyed."""
+        try:
+            if self._http_session and not self._http_session.closed:
+                # Schedule cleanup if event loop is still running
+                if self.event_loop and self.event_loop.is_running():
+                    self.event_loop.create_task(self._http_session.close())
+        except Exception:  # pylint: disable=broad-exception-caught
+            pass
 
 
 def print_info(msgtype, data, error):
