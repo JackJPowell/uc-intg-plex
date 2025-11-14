@@ -1,6 +1,6 @@
 {
   "driver_id": "plex_driver",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "min_core_api": "0.20.0",
   "name": { "en": "Plex" },
   "icon": "uc:display",
@@ -35,5 +35,5 @@
       }
     ]
   },
-  "release_date": "2025-11-08"
+  "release_date": "2025-11-13"
 }
