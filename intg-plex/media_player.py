@@ -7,8 +7,7 @@ Media-player entity functions.
 import logging
 from typing import Any
 
-from const import PlexDevice
-from const import PLEX_SIMPLE_COMMANDS
+from const import PLEX_SIMPLE_COMMANDS, PlexDevice
 from plex import PlexServer
 from ucapi import MediaPlayer, StatusCodes, media_player
 from ucapi.media_player import Commands, DeviceClasses, Options

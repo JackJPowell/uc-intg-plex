@@ -12,7 +12,7 @@ from const import PlexDevice
 from media_player import PlexMediaPlayer
 from plex import PlexServer
 from setup import PlexSetupFlow
-from ucapi_framework import BaseIntegrationDriver, BaseDeviceManager
+from ucapi_framework import BaseDeviceManager, BaseIntegrationDriver, get_config_path
 
 
 class PlexIntegrationDriver(BaseIntegrationDriver[PlexServer, PlexDevice]):
@@ -46,19 +46,18 @@ async def main():
         loop=loop, device_class=PlexServer, entity_classes=[PlexMediaPlayer]
     )
     driver.config = BaseDeviceManager(
-        driver.api.config_dir_path,
+        get_config_path(driver.api.config_dir_path),
         driver.on_device_added,
         driver.on_device_removed,
         device_class=PlexDevice,
     )
 
     for device in list(driver.config.all()):
-        driver.add_configured_device(device, connect=False)
+        driver.add_configured_device(device)
 
     setup_handler = PlexSetupFlow.create_handler(driver.config)
     await driver.api.init("driver.json", setup_handler)
 
-    # Keep the driver running until explicitly cancelled
     await asyncio.Future()
 
 

@@ -1,7 +1,8 @@
 """Constants used for Plex integration."""
 
-from typing import List
 from dataclasses import dataclass
+from typing import List
+
 from ucapi.media_player import Commands, Features, MediaType
 from ucapi.ui import Buttons, DeviceButtonMapping, UiPage
 

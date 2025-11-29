@@ -451,14 +451,14 @@ wheels = [
 
 [[package]]
 name = "plexapi"
-version = "4.16.1"
+version = "4.17.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "requests" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/66/1c/beeaf8dd489dad13ca4310a7bd9c601da6c6831e7c8ac61a45aadccb742d/plexapi-4.16.1.tar.gz", hash = "sha256:8e62d727e67b69994770196cd83a57783e9194d735aa347f682b4534ce6f0565", size = 153460, upload-time = "2025-01-09T18:44:02.137Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/97/34/375cafba2d8ad0c52b5767b67bb7d1a4db74e72a518a278a1e20b944750f/plexapi-4.17.2.tar.gz", hash = "sha256:438fbc79817f298a0897163cbd4626817559640584ac326bcf9dd5026b0b6f04", size = 160148, upload-time = "2025-11-18T18:33:56.802Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ba/07/20b8a50b8b78374a49685dfe12739c27a9cd440b13913c2cbeeb50470d1e/PlexAPI-4.16.1-py3-none-any.whl", hash = "sha256:87432226c4cd682b5780b01e8def313285c52bdd57c8e72f66a5cef73ce64530", size = 165325, upload-time = "2025-01-09T18:43:59.186Z" },
+    { url = "https://files.pythonhosted.org/packages/d7/fb/16635bae1f674de963a18554b5eefcdce28f32036bec78433fa7f82b2809/plexapi-4.17.2-py3-none-any.whl", hash = "sha256:2ceea79d5d19a2bc34c38d2f49ccaa9d423fe0ca07e3c2ed7a4dd97e7df4b86c", size = 172159, upload-time = "2025-11-18T18:33:55.401Z" },
 ]
 
 [[package]]
@@ -749,14 +749,14 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "aiohttp", specifier = "==3.9.3" },
-    { name = "pillow", specifier = "==11.1.0" },
-    { name = "plexapi", specifier = "==4.16.1" },
-    { name = "plexwebsocket", specifier = "==0.0.14" },
+    { name = "aiohttp", specifier = ">=3.9.3,<4.0.0" },
+    { name = "pillow", specifier = ">=11.1.0,<12.0.0" },
+    { name = "plexapi", specifier = ">=4.17.2,<5.0.0" },
+    { name = "plexwebsocket", specifier = ">=0.0.14,<0.1.0" },
     { name = "pydantic" },
     { name = "pyee", specifier = ">=9.0" },
-    { name = "ucapi", specifier = "==0.4.0" },
-    { name = "ucapi-framework", specifier = "==1.0.1" },
+    { name = "ucapi", specifier = ">=0.4.0,<0.5.0" },
+    { name = "ucapi-framework", specifier = ">=1.0.1,<2.0.0" },
 ]
 
 [[package]]

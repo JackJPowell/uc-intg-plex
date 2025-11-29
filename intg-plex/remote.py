@@ -8,11 +8,11 @@ import asyncio
 import logging
 from typing import Any
 
-from const import PlexDevice
 from const import (
     PLEX_REMOTE_BUTTONS_MAPPING,
     PLEX_REMOTE_SIMPLE_COMMANDS,
     PLEX_REMOTE_UI_PAGES,
+    PlexDevice,
     key_update_helper,
 )
 from plex import PlexServer

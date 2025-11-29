@@ -5,7 +5,6 @@ Setup flow for Plex integration.
 """
 
 import logging
-import re
 from typing import Any
 from urllib.parse import urlparse
 
@@ -113,7 +112,8 @@ class PlexSetupFlow(BaseSetupFlow[PlexDevice]):
         auth_token = input_values.get("auth_token", "")
         server_name = input_values.get("server", "")
 
-        url = validate_url(address)
+        if address:
+            address = validate_url(address)
 
         try:
             server = get_server(
@@ -121,13 +121,16 @@ class PlexSetupFlow(BaseSetupFlow[PlexDevice]):
                 username=username,
                 password=password,
                 auth_token=auth_token,
-                url=url,
+                url=address,
                 port=port,
             )
 
+            if not auth_token:
+                address = server._baseurl
+
             # Store server config for later use
             self._pending_device_config = {
-                "address": url,
+                "address": address,
                 "port": port,
                 "username": username,
                 "password": password,
@@ -358,7 +361,7 @@ def get_server(
         else:
             account = MyPlexAccount(username, password)
             server: PlexServer = account.resource(server_name).connect()
-        _LOG.debug("Connection %s succeeded over HTTP", address)
+        _LOG.debug("Connection %s succeeded over HTTP", server._baseurl)
     except Exception as ex:
         _LOG.warning("Cannot connect to %s over HTTP [%s]", address, ex)
         return SetupError(error_type=IntegrationSetupError.CONNECTION_REFUSED)
