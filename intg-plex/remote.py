@@ -8,19 +8,20 @@ import asyncio
 import logging
 from typing import Any
 
-import plex
-from config import PlexConfigDevice, create_entity_id
 from const import (
     PLEX_REMOTE_BUTTONS_MAPPING,
     PLEX_REMOTE_SIMPLE_COMMANDS,
     PLEX_REMOTE_UI_PAGES,
+    PlexDevice,
     key_update_helper,
 )
+from plex import PlexServer
 from ucapi import EntityTypes, Remote, StatusCodes
 from ucapi.media_player import Commands as MediaPlayerCommands
 from ucapi.media_player import States as MediaStates
 from ucapi.remote import Attributes, Features
 from ucapi.remote import States as RemoteStates
+from ucapi_framework import create_entity_id
 
 _LOG = logging.getLogger(__name__)
 
@@ -37,17 +38,13 @@ PLEX_REMOTE_STATE_MAPPING = {
 class PlexRemote(Remote):
     """Representation of a Plex Remote entity."""
 
-    def __init__(self, config_device: PlexConfigDevice, device: plex.PlexDevice):
+    def __init__(self, config_device: PlexDevice, device: PlexServer):
         """Initialize the class."""
-        self._device: plex.PlexDevice = device
+        self._device: PlexServer = device
         _LOG.debug("PlexRemote init")
-        entity_id = create_entity_id(config_device.id, EntityTypes.REMOTE)
+        entity_id = create_entity_id(EntityTypes.REMOTE, config_device.identifier)
         features = [Features.SEND_CMD, Features.ON_OFF]
-        attributes = {
-            Attributes.STATE: PLEX_REMOTE_STATE_MAPPING.get(
-                plex.PLEX_STATE_MAPPING.get(device.state)
-            ),
-        }
+        attributes = {Attributes.STATE: RemoteStates.UNKNOWN}
         super().__init__(
             entity_id,
             config_device.name,

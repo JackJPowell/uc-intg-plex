@@ -1,9 +1,27 @@
 """Constants used for Plex integration."""
 
+from dataclasses import dataclass
 from typing import List
 
 from ucapi.media_player import Commands, Features, MediaType
 from ucapi.ui import Buttons, DeviceButtonMapping, UiPage
+
+
+@dataclass
+class PlexDevice:
+    """Plex device configuration."""
+
+    identifier: str
+    name: str
+    address: str
+    username: str
+    password: str
+    auth_token: str
+    server_name: str
+    port: str
+    tv_selection: str
+    movie_selection: str
+
 
 PLEX_MEDIA_TYPES = {
     "music": MediaType.MUSIC,

@@ -7,9 +7,8 @@ Media-player entity functions.
 import logging
 from typing import Any
 
-import plex
-from config import PlexConfigDevice
-from const import PLEX_SIMPLE_COMMANDS
+from const import PLEX_SIMPLE_COMMANDS, PlexDevice
+from plex import PlexServer
 from ucapi import MediaPlayer, StatusCodes, media_player
 from ucapi.media_player import Commands, DeviceClasses, Options
 
@@ -19,14 +18,14 @@ _LOG = logging.getLogger(__name__)
 class PlexMediaPlayer(MediaPlayer):
     """Representation of a Plex Media Player entity."""
 
-    def __init__(self, config_device: PlexConfigDevice, device: plex.PlexDevice):
+    def __init__(self, config_device: PlexDevice, device: PlexServer):
         """Initialize the class."""
-        self._device: plex.PlexDevice = device
+        self._device: PlexServer = device
         _LOG.debug("PlexMediaPlayer init")
-        # entity_id = create_entity_id(config_device.identifier, EntityTypes.MEDIA_PLAYER)
+
         entity_id = config_device.identifier
         features = device.supported_features
-        # attributes = device.attributes
+
         options = {Options.SIMPLE_COMMANDS: list(PLEX_SIMPLE_COMMANDS.keys())}
         super().__init__(
             entity_id,
