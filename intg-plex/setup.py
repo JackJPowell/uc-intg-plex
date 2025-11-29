@@ -6,46 +6,25 @@ Setup flow for Plex integration.
 
 import logging
 import re
-from enum import IntEnum
+from typing import Any
 from urllib.parse import urlparse
 
-import config
-from config import PlexConfigDevice
+from const import PlexDevice
 from plexapi.myplex import MyPlexAccount
 from plexapi.server import PlexServer
 from ucapi import (
-    AbortDriverSetup,
-    DriverSetupRequest,
     IntegrationSetupError,
     RequestUserInput,
     SetupAction,
-    SetupComplete,
-    SetupDriver,
     SetupError,
     UserDataResponse,
 )
+from ucapi_framework import BaseSetupFlow
 
 _LOG = logging.getLogger(__name__)
 
 
-class SetupSteps(IntEnum):
-    """Enumeration of setup steps to keep track of user data responses."""
-
-    INIT = 0
-    CONFIGURATION_MODE = 1
-    SERVER = 2
-    DETAILS = 3
-    CLIENT = 4
-    SUBMIT = 5
-
-
-_setup_step = SetupSteps.INIT
-_cfg_add_device: bool = False
-_user_input: dict = {}
-_base_url: str = ""
-_is_reconfigure: bool = False
-
-_user_input_manual = RequestUserInput(
+_MANUAL_INPUT_SCHEMA = RequestUserInput(
     {"en": "Connection Details"},
     [
         {
@@ -62,18 +41,18 @@ _user_input_manual = RequestUserInput(
             },
         },
         {
-            "field": {"text": {"value": ""}},
+            "field": {"text": {"value": "192.168.1.207"}},
             "id": "address",
             "label": {"en": "Host Address", "de": "IP-Adresse", "fr": "Adresse IP"},
         },
         {
-            "field": {"text": {"value": ""}},
+            "field": {"text": {"value": "32400"}},
             "id": "port",
             "label": {"en": "HTTP port", "fr": "Port HTTP"},
         },
         {
-            "field": {"text": {"value": ""}},
-            "id": "token",
+            "field": {"text": {"value": "Y3RKvNYoqY-AhRBKR6ku"}},
+            "id": "auth_token",
             "label": {"en": "Auth Token"},
         },
         {
@@ -108,492 +87,263 @@ _user_input_manual = RequestUserInput(
 )
 
 
-async def driver_setup_handler(msg: SetupDriver) -> SetupAction:
-    """
-    Dispatch driver setup requests to corresponding handlers.
+class PlexSetupFlow(BaseSetupFlow[PlexDevice]):
+    """Plex integration setup flow handler."""
 
-    Either start the setup process or handle the selected Plex Client.
+    def __init__(self, config_manager, *, discovery=None):
+        """Initialize setup flow with state tracking."""
+        super().__init__(config_manager, discovery=discovery)
+        self._available_clients = []  # Store client list across screens
 
-    :param msg: the setup driver request object, either DriverSetupRequest or UserDataResponse
-    :return: the setup action on how to continue
-    """
-    global _setup_step
-    global _cfg_add_device
-    global _user_input
+    def get_manual_entry_form(self) -> RequestUserInput:
+        """Get the manual entry form for Plex server connection."""
+        return _MANUAL_INPUT_SCHEMA
 
-    if isinstance(msg, DriverSetupRequest):
-        _setup_step = SetupSteps.INIT
-        _cfg_add_device = False
-        _user_input = {}
-        return await handle_driver_setup(msg)
+    async def query_device(self, input_values: dict[str, Any]) -> RequestUserInput:
+        """
+        Create device from manual entry - returns client list screen.
 
-    if isinstance(msg, UserDataResponse):
-        _LOG.debug(msg)
-        if (
-            _setup_step == SetupSteps.SUBMIT
-            and "player" in msg.input_values
-            and msg.input_values["player"] == "no-session"
-        ):
-            return await _handle_server_config(msg, use_existing_config=True)
-        if _setup_step == SetupSteps.DETAILS:
-            return await _handle_additional_settings(msg)
-        if (
-            _setup_step == SetupSteps.CLIENT
-            and "action" in msg.input_values
-            and msg.input_values["action"] == "add"
-        ):
-            _user_input = {**_user_input, **msg.input_values}
-            return await _handle_server_config(msg, use_existing_config=True)
-        if (
-            _setup_step == SetupSteps.CLIENT
-            and "action" in msg.input_values
-            and msg.input_values["action"] == "remove"
-        ):
-            return await handle_configuration_mode(msg)
-        if (
-            _setup_step == SetupSteps.CLIENT
-            and "action" in msg.input_values
-            and msg.input_values["action"] == "reset"
-        ):
-            return await handle_configuration_mode(msg)
-        if _setup_step == SetupSteps.SUBMIT and "player" in msg.input_values:
-            _user_input = {**_user_input, **msg.input_values}
-            return await _handle_client_selection(msg)
-        if _setup_step == SetupSteps.CLIENT:
-            _user_input = {**_user_input, **msg.input_values}
-            return await _handle_server_config(msg, use_existing_config=True)
-        if (
-            _setup_step == SetupSteps.CONFIGURATION_MODE
-            and "choice" in msg.input_values
-        ):
-            return await _handle_server_config(msg, use_existing_config=True)
-        if _setup_step == SetupSteps.CONFIGURATION_MODE:
-            return await _handle_server_config(msg)
-        _LOG.error(
-            "No or invalid user response was received: %s (step %s)", msg, _setup_step
-        )
+        This is called after user fills in server connection details.
+        We connect to the server and show available clients.
+        """
+        address = input_values.get("address", "")
+        port = input_values.get("port", "32400")
+        username = input_values.get("username", "")
+        password = input_values.get("password", "")
+        auth_token = input_values.get("auth_token", "")
+        server_name = input_values.get("server", "")
 
-    elif isinstance(msg, AbortDriverSetup):
-        _LOG.info("Setup was aborted with code: %s", msg.error)
-        _setup_step = SetupSteps.INIT
+        url = validate_url(address)
 
-    return SetupError()
+        try:
+            server = get_server(
+                server_name=server_name,
+                username=username,
+                password=password,
+                auth_token=auth_token,
+                url=url,
+                port=port,
+            )
 
+            # Store server config for later use
+            self._pending_device_config = {
+                "address": url,
+                "port": port,
+                "username": username,
+                "password": password,
+                "auth_token": auth_token,
+                "server_name": server_name if server_name else "",
+            }
 
-async def handle_driver_setup(msg: DriverSetupRequest) -> RequestUserInput | SetupError:
-    """
-    Start driver setup.
+            # Get list of active clients
+            self._available_clients = []
 
-    Initiated by Remote Two to set up the driver.
-    Ask user to enter ip-address for manual configuration, otherwise auto-discovery is used.
+            for session in server.sessions():
+                for player in session.players:
+                    if (
+                        player.machineIdentifier not in self.config.all()
+                        and player.local is True
+                    ):
+                        self._available_clients.append(
+                            {
+                                "id": player.machineIdentifier,
+                                "label": {"en": f"{player.title} ({player.product})"},
+                                "title": player.title,
+                                "product": player.product,
+                            }
+                        )
 
-    :param msg: not used, we don't have any input fields in the first setup screen.
-    :return: the setup action on how to continue
-    """
-    global _setup_step
-    global _is_reconfigure
+            if not self._available_clients:
+                # No clients found, show message and ask to try again
+                return RequestUserInput(
+                    {"en": "No Active Sessions"},
+                    [
+                        {
+                            "id": "info",
+                            "label": {
+                                "en": "No active Plex clients found. Please start playing something on a client and try again.",
+                            },
+                            "field": {
+                                "label": {
+                                    "value": {
+                                        "en": "Make sure the client is actively playing media and on the same network.",
+                                    }
+                                }
+                            },
+                        },
+                        {
+                            "id": "retry",
+                            "label": {"en": "Try Again"},
+                            "field": {"checkbox": {"value": True}},
+                        },
+                    ],
+                )
 
-    # get all configured devices for the user to choose from
-    dropdown_devices = []
-    for device in config.devices.all():
-        dropdown_devices.append(
-            {"id": device.identifier, "label": {"en": f"{device.name}"}}
-        )
+            # Return client selection screen
+            return RequestUserInput(
+                {"en": "Select Plex Client"},
+                [
+                    {
+                        "id": "info",
+                        "label": {
+                            "en": "Client Selection",
+                        },
+                        "field": {
+                            "label": {
+                                "value": {
+                                    "en": "Please select the Plex Client you would like to control.",
+                                }
+                            }
+                        },
+                    },
+                    {
+                        "id": "player",
+                        "label": {"en": "Available Players"},
+                        "field": {
+                            "dropdown": {
+                                "value": self._available_clients[0]["id"],
+                                "items": [
+                                    {"id": c["id"], "label": c["label"]}
+                                    for c in self._available_clients
+                                ],
+                            }
+                        },
+                    },
+                ],
+            )
 
-    reconfigure = msg.reconfigure
-    _is_reconfigure = True
-    _LOG.debug("Starting driver setup, reconfigure=%s", reconfigure)
-    if reconfigure and dropdown_devices:
-        _setup_step = SetupSteps.CLIENT
+        except Exception as ex:
+            _LOG.error("Cannot connect to server %s: %s", address, ex)
+            return SetupError(error_type=IntegrationSetupError.CONNECTION_REFUSED)
 
-        dropdown_actions = [
-            {
-                "id": "add",
-                "label": {
-                    "en": "Add a new client",
-                },
-            },
+    async def get_additional_configuration_screen(
+        self, device_config: PlexDevice, previous_input: dict[str, Any]
+    ) -> RequestUserInput | None:
+        """
+        Show artwork selection screen after client is selected.
+
+        This is called after the client selection is made.
+        """
+        dropdown_tv_settings = [
+            {"id": "tv-poster-series", "label": {"en": "Series Poster"}},
+            {"id": "tv-poster-season", "label": {"en": "Season Poster"}},
+            {"id": "tv-poster-episode", "label": {"en": "Episode Poster"}},
+            {"id": "tv-poster-art", "label": {"en": "Series Background Art"}},
         ]
 
-        # add remove & reset actions if there's at least one configured device
-        if dropdown_devices:
-            dropdown_actions.append(
-                {
-                    "id": "remove",
-                    "label": {
-                        "en": "Delete selected client",
-                    },
-                },
-            )
-            dropdown_actions.append(
-                {
-                    "id": "reset",
-                    "label": {
-                        "en": "Reset configuration and reconfigure",
-                        "de": "Konfiguration zurücksetzen und neu konfigurieren",
-                        "fr": "Réinitialiser la configuration et reconfigurer",
-                    },
-                },
-            )
-        else:
-            # dummy entry if no clients are available
-            dropdown_devices.append({"id": "", "label": {"en": "---"}})
+        dropdown_movie_settings = [
+            {"id": "movie-poster", "label": {"en": "Movie Poster"}},
+            {"id": "movie-art", "label": {"en": "Movie Background Art"}},
+        ]
 
         return RequestUserInput(
-            {"en": "Configuration mode", "de": "Konfigurations-Modus"},
+            {"en": "Artwork Selection"},
             [
                 {
-                    "field": {
-                        "dropdown": {
-                            "value": dropdown_devices[0]["id"],
-                            "items": dropdown_devices,
-                        }
-                    },
-                    "id": "choice",
-                    "label": {
-                        "en": "Configured devices",
-                        "de": "Konfigurierte Geräte",
-                        "fr": "Appareils configurés",
-                    },
-                },
-                {
-                    "field": {
-                        "dropdown": {
-                            "value": dropdown_actions[0]["id"],
-                            "items": dropdown_actions,
-                        }
-                    },
-                    "id": "action",
-                    "label": {
-                        "en": "Action",
-                        "de": "Aktion",
-                        "fr": "Appareils configurés",
-                    },
-                },
-            ],
-        )
-
-    # Initial setup, make sure we have a clean configuration
-    # config.devices.clear()  # triggers device instance removal
-    _setup_step = SetupSteps.DETAILS
-    return _user_input_manual
-
-
-async def handle_configuration_mode(
-    msg: UserDataResponse,
-) -> RequestUserInput | SetupComplete | SetupError:
-    """
-    Process user data response in a setup process.
-
-    If ``address`` field is set by the user: try connecting to device and retrieve model information.
-    Otherwise, start Plex instances discovery and present the found devices to the user to choose from.
-
-    :param msg: response data from the requested user data
-    :return: the setup action on how to continue
-    """
-    global _setup_step
-    global _cfg_add_device
-
-    action = msg.input_values["action"]
-
-    match action:
-        case "add":
-            _cfg_add_device = True
-        case "remove":
-            choice = msg.input_values["choice"]
-            if not config.devices.remove(choice):
-                _LOG.warning("Could not remove device from configuration: %s", choice)
-                return SetupError(error_type=IntegrationSetupError.OTHER)
-            config.devices.store()
-            return SetupComplete()
-        case "reset":
-            config.devices.clear()
-            return SetupComplete()
-        case _:
-            _LOG.error("Invalid configuration action: %s", action)
-            return SetupError(error_type=IntegrationSetupError.OTHER)
-
-    _setup_step = SetupSteps.CLIENT
-    return _user_input_manual
-
-
-async def _handle_server_config(
-    msg: UserDataResponse, use_existing_config=False
-) -> RequestUserInput | SetupComplete | SetupError:
-    """
-    Process user data response in a setup process.
-
-    If ``address`` field is set by the user: try connecting to device and retrieve model information.
-    Otherwise, start LG TV discovery and present the found devices to the user to choose from.
-
-    :param msg: response data from the requested user data
-    :return: the setup action on how to continue
-    """
-    global _setup_step
-    global _base_url
-    global _user_input
-
-    dropdown_devices = []
-
-    if (
-        use_existing_config
-        and "choice" in _user_input
-        and msg.input_values["choice"] != "no-session"
-    ):
-        ec = config.devices.get(msg.input_values["choice"])
-        msg.input_values["address"] = ec.address
-        msg.input_values["port"] = ec.port
-        msg.input_values["username"] = ec.username
-        msg.input_values["password"] = ec.password
-        msg.input_values["token"] = ec.auth_token
-        msg.input_values["server"] = ec.server_name
-
-    address = msg.input_values.get("address", None)
-    port = msg.input_values["port"]
-    username = msg.input_values["username"]
-    password = msg.input_values["password"]
-    auth_token = msg.input_values["token"]
-    server_name = msg.input_values["server"]
-
-    url = validate_url(address)
-
-    try:
-        server = get_server(
-            server_name=server_name,
-            username=username,
-            password=password,
-            auth_token=auth_token,
-            url=url,
-            port=port,
-        )
-
-        existing_players = get_configured_device_ids()
-        for session in server.sessions():
-            for player in session.players:
-                if (
-                    player.machineIdentifier not in existing_players
-                    and player.local is True
-                ):
-                    dropdown_devices.append(
-                        {
-                            "id": player.machineIdentifier,
-                            "label": {"en": f"{player.title} ({player.product})"},
-                        }
-                    )
-
-        if not dropdown_devices:
-            dropdown_devices.append(
-                {"id": "no-session", "label": {"en": "No Active Sessions"}}
-            )
-
-        _setup_step = SetupSteps.SUBMIT
-        return RequestUserInput(
-            {"en": "Unregistered Players"},
-            [
-                {
-                    "id": "info",
-                    "label": {
-                        "en": "Client Selection",
-                    },
+                    "id": "details",
+                    "label": {"en": "Artwork Settings"},
                     "field": {
                         "label": {
                             "value": {
-                                "en": "Please select the Plex Client you would like to control. \
-                                If it's not in the list, make sure the machine is on and the client is active.",
+                                "en": "Choose which artwork to display for TV shows and movies.",
                             }
                         }
                     },
                 },
                 {
-                    "id": "player",
-                    "label": {"en": "Unregistered Players"},
+                    "id": "tv_selection",
+                    "label": {"en": "TV Shows"},
                     "field": {
                         "dropdown": {
-                            "value": dropdown_devices[0]["id"],
-                            "items": dropdown_devices,
+                            "value": dropdown_tv_settings[0]["id"],
+                            "items": dropdown_tv_settings,
+                        }
+                    },
+                },
+                {
+                    "id": "movie_selection",
+                    "label": {"en": "Movies"},
+                    "field": {
+                        "dropdown": {
+                            "value": dropdown_movie_settings[0]["id"],
+                            "items": dropdown_movie_settings,
                         }
                     },
                 },
             ],
         )
 
-    except Exception as ex:
-        _LOG.error("Cannot connect to manually entered address %s: %s", address, ex)
-        return SetupError(error_type=IntegrationSetupError.CONNECTION_REFUSED)
+    async def handle_additional_configuration_response(
+        self, msg: UserDataResponse
+    ) -> SetupAction | RequestUserInput:
+        """
+        Handle the artwork selection response and complete setup.
 
+        This is called after user selects artwork preferences.
+        """
+        # Check if user clicked retry on "no clients" screen
+        if "retry" in msg.input_values and "player" not in msg.input_values:
+            # Return to manual entry to re-scan for clients
+            # Pass the server config stored in _pending_device_config
+            return await self.query_device(self._pending_device_config)
 
-async def _handle_additional_settings(
-    msg: UserDataResponse, use_existing_config=False
-) -> RequestUserInput | SetupComplete | SetupError:
-    """
-    Process user data response in a setup process.
+        # Check if we're selecting a client (pending device is still a dict, not PlexDevice)
+        if "player" in msg.input_values and isinstance(
+            self._pending_device_config, dict
+        ):
+            # User selected a client, now we need to create device and show artwork screen
+            machine_identifier = msg.input_values["player"]
 
-    If ``address`` field is set by the user: try connecting to device and retrieve model information.
-    Otherwise, start LG TV discovery and present the found devices to the user to choose from.
+            # Find the selected client
+            selected_client = None
+            for client in self._available_clients:
+                if client["id"] == machine_identifier:
+                    selected_client = client
+                    break
 
-    :param msg: response data from the requested user data
-    :return: the setup action on how to continue
-    """
-    global _setup_step
-    global _base_url
+            if not selected_client:
+                _LOG.error("Selected client not found: %s", machine_identifier)
+                return SetupError(error_type=IntegrationSetupError.OTHER)
 
-    dropdown_tv_settings = [
-        {
-            "id": "tv-poster-series",
-            "label": {
-                "en": "Series Poster",
-            },
-        },
-        {
-            "id": "tv-poster-season",
-            "label": {
-                "en": "Season Poster",
-            },
-        },
-        {
-            "id": "tv-poster-episode",
-            "label": {
-                "en": "Episode Poster",
-            },
-        },
-        {
-            "id": "tv-poster-art",
-            "label": {
-                "en": "Series Background Art",
-            },
-        },
-    ]
+            name = f"{selected_client.get('title', 'Unknown')} ({selected_client.get('product', 'Unknown')})"
 
-    dropdown_movie_settings = [
-        {
-            "id": "movie-poster",
-            "label": {
-                "en": "Movie Poster",
-            },
-        },
-        {
-            "id": "movie-art",
-            "label": {
-                "en": "Movie Background Art",
-            },
-        },
-    ]
+            # Create device config with server details
+            device = PlexDevice(
+                identifier=machine_identifier,
+                name=name,
+                address=self._pending_device_config["address"],
+                port=self._pending_device_config["port"],
+                username=self._pending_device_config["username"],
+                password=self._pending_device_config["password"],
+                auth_token=self._pending_device_config["auth_token"],
+                server_name=self._pending_device_config["server_name"],
+                tv_selection="",  # Will be set in next screen
+                movie_selection="",
+            )
 
-    _setup_step = SetupSteps.CLIENT
-    return RequestUserInput(
-        {"en": "Nitpicky Details"},
-        [
-            {
-                "id": "details",
-                "label": {
-                    "en": "Nitpicky Details",
-                },
-                "field": {
-                    "label": {
-                        "value": {
-                            "en": "What artwork should be displayed?",
-                        }
-                    }
-                },
-            },
-            {
-                "id": "tv_selection",
-                "label": {"en": "TV Shows"},
-                "field": {
-                    "dropdown": {
-                        "value": dropdown_tv_settings[0]["id"],
-                        "items": dropdown_tv_settings,
-                    }
-                },
-            },
-            {
-                "id": "movie_selection",
-                "label": {"en": "Movies"},
-                "field": {
-                    "dropdown": {
-                        "value": dropdown_movie_settings[0]["id"],
-                        "items": dropdown_movie_settings,
-                    }
-                },
-            },
-        ],
-    )
+            # Store as pending and show artwork screen
+            self._pending_device_config = device
+            return await self.get_additional_configuration_screen(
+                device, msg.input_values
+            )
 
+        # User completed artwork selection
+        tv_selection = msg.input_values.get("tv_selection", "tv-poster-series")
+        movie_selection = msg.input_values.get("movie_selection", "movie-poster")
 
-async def _handle_client_selection(msg: UserDataResponse) -> SetupComplete | SetupError:
-    """
-    Process user data response in a setup process.
-
-    If ``address`` field is set by the user: try connecting to device and retrieve model information.
-    Otherwise, start LG TV discovery and present the found devices to the user to choose from.
-
-    :param msg: response data from the requested user data
-    :return: the setup action on how to continue
-    """
-    global _setup_step
-    global _user_input
-
-    if "choice" in _user_input:
-        ec = config.devices.get(msg.input_values["choice"])
-        msg.input_values["address"] = ec.address
-        msg.input_values["port"] = ec.port
-        msg.input_values["username"] = ec.username
-        msg.input_values["password"] = ec.password
-        msg.input_values["token"] = ec.auth_token
-        msg.input_values["server"] = ec.server_name
-        msg.input_values["tv_selection"] = ec.tv_selection
-        msg.input_values["movie_selection"] = ec.movie_selection
-
-    if "tv_selection" in _user_input:
-        msg.input_values["tv_selection"] = _user_input["tv_selection"]
-        msg.input_values["movie_selection"] = _user_input["movie_selection"]
-
-    address = msg.input_values["address"]
-    port = msg.input_values["port"]
-    username = msg.input_values["username"]
-    password = msg.input_values["password"]
-    auth_token = msg.input_values["token"]
-    server_name = msg.input_values["server"]
-    machine_identifier = msg.input_values["player"]
-    tv_selection = msg.input_values["tv_selection"]
-    movie_selection = msg.input_values["movie_selection"]
-    name = "Plex"
-    url = validate_url(address)
-
-    server = get_server(
-        server_name=server_name,
-        username=username,
-        password=password,
-        auth_token=auth_token,
-        url=url,
-        port=port,
-    )
-    for session in server.sessions():
-        for player in session.players:
-            if player.machineIdentifier == machine_identifier:
-                name = f"{player.title} ({player.product})"
-                break
-
-    if not server_name:
-        server_name = server.friendlyName
-
-    pcd = PlexConfigDevice(
-        identifier=machine_identifier,
-        name=name,
-        address=url,
-        port=port,
-        username=username,
-        password=password,
-        auth_token=auth_token,
-        server_name=server_name,
-        tv_selection=tv_selection,
-        movie_selection=movie_selection,
-    )
-
-    config.devices.add(pcd)
-    config.devices.store()
-    _LOG.info("Setup successfully completed for %s", machine_identifier)
-    return SetupComplete()
+        # Update the pending device with artwork selections
+        return PlexDevice(
+            identifier=self._pending_device_config.identifier,
+            name=self._pending_device_config.name,
+            address=self._pending_device_config.address,
+            port=self._pending_device_config.port,
+            username=self._pending_device_config.username,
+            password=self._pending_device_config.password,
+            auth_token=self._pending_device_config.auth_token,
+            server_name=self._pending_device_config.server_name,
+            tv_selection=tv_selection,
+            movie_selection=movie_selection,
+        )
 
 
 def get_server(
@@ -613,15 +363,6 @@ def get_server(
         return SetupError(error_type=IntegrationSetupError.CONNECTION_REFUSED)
 
     return server
-
-
-def get_configured_device_ids() -> list:
-    """Get configuration IDs."""
-    all_devices = config.devices.all()
-    ids = []
-    for device in all_devices:
-        ids.append(device.identifier)
-    return ids
 
 
 def validate_url(uri):

@@ -6,27 +6,29 @@ This module implements Plex communication of the Remote Two integration driver.
 
 import asyncio
 import base64
+from datetime import datetime, UTC
 import io
 import logging
-from asyncio import AbstractEventLoop, Future, Lock, shield
-from enum import IntEnum
+from asyncio import AbstractEventLoop
 from io import BytesIO
-from typing import Any, ParamSpec, TypeVar
+from typing import Any
 
 import aiohttp
-from config import PlexConfigDevice
+from const import PlexDevice
 from const import PLEX_FEATURES
 from PIL import Image
 from plexapi.base import MediaContainer
 from plexapi.myplex import MyPlexAccount
-from plexapi.server import PlexClient, PlexServer
+from plexapi.server import PlexServer as PlexApiServer, PlexClient
 from plexwebsocket import SIGNAL_CONNECTION_STATE, STATE_CONNECTED, PlexWebsocket
-from pyee.asyncio import AsyncIOEventEmitter
-from ucapi.media_player import Features
-from ucapi.media_player import States as MediaStates
-
-_PlexDeviceT = TypeVar("_PlexDeviceT", bound="PlexDevice")
-_P = ParamSpec("_P")
+from ucapi.media_player import (
+    States as MediaStates,
+    Features,
+    Attributes as MediaAttr,
+    MediaType,
+)
+from ucapi_framework import ExternalClientDevice
+from ucapi_framework.device import DeviceEvents
 
 _LOG = logging.getLogger(__name__)
 
@@ -35,126 +37,146 @@ WEBSOCKET_WATCHDOG_INTERVAL = 10
 CONNECTION_RETRIES = 10
 
 
-class Events(IntEnum):
-    """Internal driver events."""
-
-    CONNECTING = 0
-    CONNECTED = 1
-    DISCONNECTED = 2
-    ERROR = 3
-    UPDATE = 4
-
-
-class States(IntEnum):
-    """State of a connected AVR."""
-
-    UNKNOWN = 0
-    UNAVAILABLE = 1
-    OFF = 2
-    ON = 3
-    PLAYING = 4
-    PAUSED = 5
-    STOPPED = 6
-    BUFFERING = 7
-    SEEKING = 8
-    IDLE = 9
-
-
-PLEX_STATE_MAPPING = {
-    States.OFF: MediaStates.OFF,
-    States.ON: MediaStates.ON,
-    States.STOPPED: MediaStates.STANDBY,
-    States.PLAYING: MediaStates.PLAYING,
-    States.PAUSED: MediaStates.PAUSED,
-    States.IDLE: MediaStates.ON,
-    States.UNAVAILABLE: MediaStates.STANDBY,
-}
-
-
-class PlexDevice:
-    """Representing a Plex Device."""
+class PlexServer(ExternalClientDevice):
+    """Representing a Plex Server connection and device control."""
 
     def __init__(
         self,
-        device_config: PlexConfigDevice,
+        device: PlexDevice,
         loop: AbstractEventLoop | None = None,
+        config_manager: Any = None,
     ):
         """Create instance with Plex client."""
-        self._device = device_config
-        self.identifier: str = device_config.identifier
-        self._name: str = device_config.name
-        self.event_loop = loop or asyncio.get_running_loop()
-        self.events = AsyncIOEventEmitter(self.event_loop)
+        # Initialize base class with watchdog settings
+        # The ExternalClientDevice provides: self.events, self._device_config, self._loop, self._client
+        super().__init__(
+            device,
+            loop,
+            enable_watchdog=True,
+            watchdog_interval=WEBSOCKET_WATCHDOG_INTERVAL,
+            reconnect_delay=5,
+            max_reconnect_attempts=CONNECTION_RETRIES,
+            config_manager=config_manager,
+        )
 
-        self._plex_connection: PlexWebsocket | None = None
-        self._plex: PlexServer | None = None
+        self.event_loop = self._loop
+
+        # Plex-specific state
+        self._plex: PlexApiServer | None = None  # Server connection (stateless HTTP)
+        self._plex_client: PlexClient | None = (
+            None  # Player client for sending commands
+        )
         self._supported_features = PLEX_FEATURES
         self._play_state = None
         self._key = None
         self._view_offset = None
         self._players: list[Any, Any] = None
         self._session: MediaContainer = None
-        self._client: PlexClient = None
         self._is_on: bool | None = False
 
         self._connect_error = False
-        self._available: bool = True
         self._volume = 0
         self._is_volume_muted = False
         self._media_image_url = ""
         self._image_cache = None
         self._image_cache_url = None
 
-        self._websocket_task = None
-        self._connect_lock = Lock()
-        self._reconnect_retry = 0
         self._properties = {}
-        self._http_session: aiohttp.ClientSession | None = None
+        self._background_tasks: set[asyncio.Task] = set()
 
-        _LOG.debug("Plex instance created: %s", device_config.identifier)
-        self.event_loop.create_task(self.init_connection())
+        _LOG.debug("Plex instance created: %s", device.identifier)
 
-        self._connection_status: Future | None = None
+    # ─────────────────────────────────────────────────────────────────
+    # ExternalClientDevice abstract method implementations
+    # ─────────────────────────────────────────────────────────────────
 
-    async def init_connection(self):
-        """Initialize connection to device."""
-        if self._plex_connection:
-            try:
-                await self._plex_connection.close()
-            except Exception:
-                pass
-            finally:
-                self._plex_connection = None
+    async def create_client(self) -> PlexWebsocket:
+        """
+        Create the PlexWebsocket client instance.
 
-        if self._client:
-            self._client = None
+        This also establishes the HTTP connection to the Plex server.
+        """
+        # First, establish connection to Plex server (stateless HTTP API)
+        self._plex = self._get_plex_server()
 
-        self.events.emit(Events.CONNECTING, self.identifier)
-        self._plex = self.get_plex_server()
+        if not self._plex:
+            raise ConnectionError(f"Failed to connect to Plex server at {self.address}")
 
-        self._plex_connection: PlexWebsocket = PlexWebsocket(
+        # Create the websocket client
+        return PlexWebsocket(
             plex_server=self._plex,
-            callback=self.plex_ws_updates,
+            callback=self._plex_ws_updates,
             subscriptions=["playing", "status", "progress"],
         )
 
-        # Start listening but don't block
-        self.event_loop.create_task(self._plex_connection.listen())
+    async def connect_client(self) -> None:
+        """
+        Connect the PlexWebsocket client and set up event handlers.
 
-        # Give websocket time to connect (with timeout)
+        The PlexWebsocket.listen() method starts the connection.
+        """
+        # Start listening (this runs in background)
+        self._create_task(self._client.listen())
+
+        # Wait for websocket to connect with timeout
         try:
             await asyncio.wait_for(self._wait_for_websocket_connection(), timeout=5.0)
         except asyncio.TimeoutError:
             _LOG.warning("Websocket connection timeout for %s", self.identifier)
+            # Don't raise - the watchdog will handle reconnection if needed
 
-        # Get initial session state asynchronously
+        # Get initial session state
         await self._update_session_state()
 
-        _LOG.debug("Websocket state: %s", self._plex_connection.state)
+        _LOG.debug("Websocket state: %s", self._client.state)
+
+    async def disconnect_client(self) -> None:
+        """
+        Disconnect the PlexWebsocket client.
+        """
+        # Cancel all background tasks first
+        if self._background_tasks:
+            for task in self._background_tasks:
+                task.cancel()
+            await asyncio.gather(*self._background_tasks, return_exceptions=True)
+            self._background_tasks.clear()
+
+        # Close websocket connection (not async)
+        if self._client:
+            try:
+                self._client.close()
+            except Exception:  # pylint: disable=broad-exception-caught
+                pass
+
+        # Clear player client reference
+        if self._plex_client:
+            self._plex_client = None
+
+        # Reset state
+        self._reset_state()
+
+    def check_client_connected(self) -> bool:
+        """
+        Check if the PlexWebsocket is connected.
+
+        This queries the actual connection state of the websocket.
+        """
+        return self._client is not None and self._client.state == STATE_CONNECTED
+
+    # ─────────────────────────────────────────────────────────────────
+    # Helper methods
+    # ─────────────────────────────────────────────────────────────────
+
+    def _create_task(self, coro):
+        """Create a background task and track it."""
+        task = self.event_loop.create_task(coro)
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+        return task
 
     async def _wait_for_websocket_connection(self):
         """Wait for websocket to connect."""
-        while self._plex_connection.state != STATE_CONNECTED:
+        while self._client and self._client.state != STATE_CONNECTED:
             await asyncio.sleep(0.1)
 
     async def _update_session_state(self):
@@ -163,188 +185,44 @@ class PlexDevice:
             None, self.get_session_by_client_id, self.device_config.identifier
         )
         if self._session:
-            self._client = self.get_plex_client()
-            self._is_on = self._client is not None
+            self._plex_client = self.get_plex_client()
+            self._is_on = self._plex_client is not None
         else:
             self._is_on = False
 
-    def get_plex_server(self) -> PlexServer:
-        """Get a reference to the PMS."""
-        config = self._device
+    def _get_plex_server(self) -> PlexApiServer | None:
+        """Get a reference to the PMS (stateless HTTP connection)."""
+        config = self._device_config
 
-        url = f"{config.address}:{config.port}"
+        # Ensure address has http:// scheme
+        address = config.address
+        if not address.startswith("http://") and not address.startswith("https://"):
+            address = f"http://{address}"
+
+        url = f"{address}:{config.port}"
         try:
             if config.auth_token:
-                self._plex = PlexServer(baseurl=url, token=config.auth_token, timeout=5)
+                return PlexApiServer(baseurl=url, token=config.auth_token, timeout=5)
             else:
                 account = MyPlexAccount(config.username, config.password)
-                self._plex: PlexServer = account.resource(config.server_name).connect()
-            _LOG.debug("Connection %s succeeded over HTTP", url)
+                return account.resource(config.server_name).connect()
         except Exception as ex:  # pylint: disable=broad-exception-caught
             _LOG.error("Cannot connect to %s over HTTP [%s]", url, ex)
+            return None
 
-        return self._plex
-
-    def get_state(self) -> States:
+    def get_state(self) -> MediaStates:
         """Get state of device."""
         if self._play_state == "paused":
-            return States.PAUSED
+            return MediaStates.PAUSED
         if self._play_state == "playing":
-            return States.PLAYING
+            return MediaStates.PLAYING
         if self._play_state == "stopped":
-            return States.OFF
+            return MediaStates.OFF
         if self.is_on:
-            return States.ON
+            return MediaStates.ON
         if self._no_active_players:
-            return States.IDLE
-        return States.OFF
-
-    async def _clear_connection(self, close=True):
-        self._reset_state()
-        if close and self._plex_connection:
-            try:
-                await self._plex_connection.close()
-            except Exception:  # pylint: disable=broad-exception-caught
-                pass
-            finally:
-                self._plex_connection = None
-        # Clear client reference
-        if self._client:
-            self._client = None
-        # Clear HTTP session
-        if self._http_session and not self._http_session.closed:
-            try:
-                await self._http_session.close()
-            except Exception:  # pylint: disable=broad-exception-caught
-                pass
-            finally:
-                self._http_session = None
-
-    async def _reconnect_websocket_if_disconnected(self, *_) -> bool:
-        """Reconnect the websocket if it fails."""
-        if (
-            not self._plex_connection.state == STATE_CONNECTED
-            and self._reconnect_retry >= CONNECTION_RETRIES
-        ):
-            return False
-        if not self._plex_connection.state == STATE_CONNECTED:
-            self._reconnect_retry += 1
-            _LOG.debug(
-                "Plex websocket %s not connected, retry %s / %s",
-                self._device.identifier,
-                self._reconnect_retry,
-                CONNECTION_RETRIES,
-            )
-            # Connection status result has to be reset if connection fails and future result is still okay
-            if not self._connection_status or self._connection_status.done():
-                self._connection_status = self.event_loop.create_future()
-            try:
-                await asyncio.wait_for(shield(self.connect()), DEFAULT_TIMEOUT * 2)
-            except asyncio.TimeoutError:
-                _LOG.debug(
-                    "Plex websocket too slow to reconnect on %s",
-                    self._device.identifier,
-                )
-        else:
-            if self._reconnect_retry > 0:
-                self._reconnect_retry = 0
-                _LOG.debug("Plex websocket is connected")
-        return True
-
-    async def start_watchdog(self):
-        """Start websocket watchdog."""
-        while True:
-            await asyncio.sleep(WEBSOCKET_WATCHDOG_INTERVAL)
-            try:
-                if not await self._reconnect_websocket_if_disconnected():
-                    _LOG.debug("Stop watchdog for %s", self._device.identifier)
-                    self._websocket_task = None
-                    break
-            except Exception as ex:  # pylint: disable=broad-exception-caught
-                _LOG.error("Unknown exception %s", ex)
-
-    async def connect(self) -> bool:
-        """Connect to Plex via websocket protocol."""
-        try:
-            if self._connect_lock.locked():
-                _LOG.debug(
-                    "Connect to %s : already in progress, returns",
-                    self._device.identifier,
-                )
-                return True
-            _LOG.debug("Connecting to %s", self._device.identifier)
-            await self._connect_lock.acquire()
-            if self._plex_connection and self._plex_connection.state == STATE_CONNECTED:
-                _LOG.debug("Already connected to %s", self._device.identifier)
-                return True
-            await self.init_connection()
-
-            self._connect_error = False
-            _LOG.debug("Connection successful to %s", self._device.identifier)
-            self._reconnect_retry = 0
-            if self._websocket_task is None:
-                self._websocket_task = self.event_loop.create_task(
-                    self.start_watchdog()
-                )
-            if self._connection_status and not self._connection_status.done():
-                self._connection_status.set_result(True)
-
-            return True
-
-        except Exception as ex:  # pylint: disable=broad-exception-caught
-            _LOG.error(
-                "Unknown exception connect to %s : %s", self._device.identifier, ex
-            )
-        finally:
-            # After 10 retries, reconnection delay will go from 10 to 30s and stop logging
-            if self._reconnect_retry >= CONNECTION_RETRIES and self._connect_error:
-                _LOG.debug(
-                    "Plex websocket not connected, abort retries to %s",
-                    self._device.identifier,
-                )
-                if self._websocket_task:
-                    try:
-                        self._websocket_task.cancel()
-                    except Exception as ex:  # pylint: disable=broad-exception-caught
-                        _LOG.error("Failed to cancel websocket task %s", ex)
-                    self._websocket_task = None
-            elif self._websocket_task is None:
-                self._websocket_task = self.event_loop.create_task(
-                    self.start_watchdog()
-                )
-            self._available = True
-            self.events.emit(Events.CONNECTED, self.identifier)
-            self._connect_lock.release()
-
-    async def disconnect(self):
-        """Disconnect from Plex Websocket."""
-        _LOG.debug("Disconnect %s", self.identifier)
-        try:
-            if self._websocket_task:
-                self._websocket_task.cancel()
-                try:
-                    await self._websocket_task
-                except asyncio.CancelledError:
-                    pass
-            if self._plex_connection:
-                await self._plex_connection.close()
-            # Explicitly clear client reference to close any proxy connections
-            if self._client:
-                self._client = None
-            # Close HTTP session
-            if self._http_session and not self._http_session.closed:
-                await self._http_session.close()
-                self._http_session = None
-        except Exception as error:  # pylint: disable=broad-exception-caught
-            _LOG.error(
-                "Logout to %s failed: [%s]",
-                self._device.identifier,
-                error,
-            )
-            # self._available = False
-        finally:
-            self._websocket_task = None
-            self._plex_connection = None
+            return MediaStates.OFF
+        return MediaStates.OFF
 
     def _reset_state(self, players=None):
         self._players = players
@@ -352,8 +230,8 @@ class PlexDevice:
         # Clear image cache to free memory
         self._image_cache = None
 
-    def plex_ws_updates(self, msgtype, data, error) -> None:
-        """Handle WS Messages."""
+    def _plex_ws_updates(self, msgtype, data, error) -> None:
+        """Handle WS Messages from PlexWebsocket."""
         updated_data = {}
         payload = None
 
@@ -376,22 +254,27 @@ class PlexDevice:
                             if payload["state"] == "stopped":
                                 self._image_cache = None
                                 self._is_on = False
-                                updated_data["state"] = self.get_state()
+                                updated_data[MediaAttr.STATE] = self.get_state()
                             else:
                                 self._is_on = True
-                                updated_data["state"] = self.get_state()
+                                updated_data[MediaAttr.STATE] = self.get_state()
                                 self._view_offset = payload["viewOffset"] / 1000
-                                updated_data["position"] = self._view_offset
+                                updated_data[MediaAttr.MEDIA_POSITION] = (
+                                    self._view_offset
+                                )
+                                updated_data[MediaAttr.MEDIA_POSITION_UPDATED_AT] = (
+                                    datetime.now(tz=UTC).isoformat()
+                                )
 
                                 # Fetch full session details asynchronously
-                                asyncio.create_task(
+                                self._create_task(
                                     self._fetch_session_details(
                                         payload, self.identifier
                                     )
                                 )
 
         if updated_data:
-            self.events.emit(Events.UPDATE, self.identifier, updated_data)
+            self.events.emit(DeviceEvents.UPDATE, self.identifier, updated_data)
 
         if error:
             _LOG.debug(error)
@@ -410,23 +293,32 @@ class PlexDevice:
             self._session = session
             self._key = payload["key"]
 
+            if session.TYPE == "audio":
+                media_type = MediaType.MUSIC
+            elif session.TYPE == "episode":
+                media_type = MediaType.TVSHOW
+            elif session.TYPE == "video":
+                media_type = MediaType.VIDEO
+            else:
+                media_type = ""
+
             updated_data = {
-                "total_time": session.duration / 1000,
-                "media_type": session.TYPE,
-                "title": session.title,
+                MediaAttr.MEDIA_DURATION: session.duration / 1000,
+                MediaAttr.MEDIA_TYPE: media_type,
+                MediaAttr.MEDIA_TITLE: session.title,
             }
 
             if session.type == "episode":
-                updated_data["artist"] = session.seasonEpisode.upper()
+                updated_data[MediaAttr.MEDIA_ARTIST] = session.seasonEpisode.upper()
 
             # Get artwork URL
             url = self._get_artwork_url(session)
 
             # Fetch image asynchronously
-            asyncio.create_task(self._fetch_and_update_image(url, identifier))
+            self._create_task(self._fetch_and_update_image(url, identifier))
 
             # Send immediate update with available data
-            self.events.emit(Events.UPDATE, identifier, updated_data)
+            self.events.emit(DeviceEvents.UPDATE, identifier, updated_data)
 
         except Exception as ex:
             _LOG.error("Failed to fetch session details: %s", ex)
@@ -435,7 +327,7 @@ class PlexDevice:
         """Get artwork URL based on configuration."""
         try:
             if session.type == "episode":
-                match self._device.tv_selection:
+                match self._device_config.tv_selection:
                     case "tv-poster-series":
                         return self.build_plex_url(session.grandparentThumb)
                     case "tv-poster-season":
@@ -447,7 +339,7 @@ class PlexDevice:
                     case _:
                         return self.build_plex_url(session.grandparentThumb)
             else:
-                match self._device.movie_selection:
+                match self._device_config.movie_selection:
                     case "movie-poster":
                         return session.posterUrl
                     case "movie-art":
@@ -467,54 +359,58 @@ class PlexDevice:
             if image_data:
                 self._media_image_url = image_data
                 # Emit update with the new artwork
-                self.events.emit(Events.UPDATE, identifier, {"artwork": image_data})
+                self.events.emit(
+                    DeviceEvents.UPDATE,
+                    identifier,
+                    {MediaAttr.MEDIA_IMAGE_URL: image_data},
+                )
         except Exception as ex:  # pylint: disable=broad-exception-caught
             _LOG.error("Failed to fetch and update image: %s", ex)
 
     async def store_image_as_base64(self, url, max_size):
         """Retrieve and store image as base64 data."""
+
         # Check if we need to fetch a new image (cache miss or different URL)
         if not self._image_cache or self._image_cache_url != url:
             try:
-                # Create session if it doesn't exist
-                if not self._http_session or self._http_session.closed:
-                    timeout = aiohttp.ClientTimeout(total=5)
-                    self._http_session = aiohttp.ClientSession(timeout=timeout)
+                # Use a transient session for each image fetch to avoid lifecycle issues
+                # This ensures the session is always properly closed
+                timeout = aiohttp.ClientTimeout(total=10)
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    async with session.get(url) as response:
+                        if response.status == 200:
+                            f = await response.read()
+                            image = Image.open(BytesIO(f))
 
-                async with self._http_session.get(url) as response:
-                    if response.status == 200:
-                        f = await response.read()
-                        image = Image.open(BytesIO(f))
+                            width, height = image.size
 
-                        width, height = image.size
+                            if max_size >= max(width, height):
+                                byte_image = io.BytesIO()
+                                image.save(byte_image, format="PNG")
+                                byte_image = byte_image.getvalue()
+                                image_b64 = base64.b64encode(byte_image).decode("utf-8")
+                                self._image_cache = f"data:image/png;base64,{image_b64}"
+                                self._image_cache_url = url
+                                return self._image_cache
 
-                        if max_size >= max(width, height):
+                            if width > height:
+                                new_width = max_size
+                                new_height = int(height * (max_size / width))
+                            else:
+                                new_height = max_size
+                                new_width = int(width * (max_size / height))
+
+                            resized_image = image.resize(
+                                (new_width, new_height), Image.Resampling.LANCZOS
+                            )
+
                             byte_image = io.BytesIO()
-                            image.save(byte_image, format="PNG")
+                            resized_image.save(byte_image, format="PNG")
                             byte_image = byte_image.getvalue()
+
                             image_b64 = base64.b64encode(byte_image).decode("utf-8")
                             self._image_cache = f"data:image/png;base64,{image_b64}"
                             self._image_cache_url = url
-                            return self._image_cache
-
-                        if width > height:
-                            new_width = max_size
-                            new_height = int(height * (max_size / width))
-                        else:
-                            new_height = max_size
-                            new_width = int(width * (max_size / height))
-
-                        resized_image = image.resize(
-                            (new_width, new_height), Image.Resampling.LANCZOS
-                        )
-
-                        byte_image = io.BytesIO()
-                        resized_image.save(byte_image, format="PNG")
-                        byte_image = byte_image.getvalue()
-
-                        image_b64 = base64.b64encode(byte_image).decode("utf-8")
-                        self._image_cache = f"data:image/png;base64,{image_b64}"
-                        self._image_cache_url = url
             except Exception as ex:  # pylint: disable=broad-exception-caught
                 _LOG.error("Failed to fetch image from %s: %s", url, ex)
                 return ""
@@ -522,8 +418,12 @@ class PlexDevice:
 
     def build_plex_url(self, path: str) -> str:
         """Build a plex url from config and supplied path"""
-        config = self._device
-        return f"{config.address}:{config.port}{path}?X-Plex-Token={config.auth_token}"
+        config = self._device_config
+        # Ensure address has http:// scheme
+        address = config.address
+        if not address.startswith("http://") and not address.startswith("https://"):
+            address = f"http://{address}"
+        return f"{address}:{config.port}{path}?X-Plex-Token={config.auth_token}"
 
     def get_players(self) -> list[Any, Any]:
         """Get active players from session."""
@@ -545,14 +445,13 @@ class PlexDevice:
         return None
 
     def get_plex_client(self) -> PlexClient | None:
-        """Get client from session."""
+        """Get client from session for sending playback commands."""
         if self._session:
             try:
-                self._client = self._session.player
-                self._client.proxyThroughServer(True, self._plex)
+                self._plex_client = self._session.player
+                self._plex_client.proxyThroughServer(True, self._plex)
 
-                self.events.emit(Events.CONNECTED, self.identifier)
-                return self._client
+                return self._plex_client
             except Exception as ex:  # pylint: disable=broad-exception-caught
                 _LOG.error(
                     "Unable to connect to client (%s) %s",
@@ -560,39 +459,42 @@ class PlexDevice:
                     ex,
                 )
         updated_data = {}
-        updated_data["state"] = self.get_state()
-        self.events.emit(Events.UPDATE, self.identifier, updated_data)
+        updated_data[MediaAttr.STATE] = self.get_state()
+        self.events.emit(DeviceEvents.UPDATE, self.identifier, updated_data)
         return None
 
-    # def command_button(self, button: ButtonKeymap):
-    #     """Call a button command."""
-    #     self._client.sendCommand(button.get("keymap"))
+    # ─────────────────────────────────────────────────────────────────
+    # Properties
+    # ─────────────────────────────────────────────────────────────────
 
-    # def command_action(self, command: str):
-    #     """Send custom command."""
-    #     self._client.sendCommand(command)
+    @property
+    def identifier(self) -> str:
+        """Return device identifier."""
+        return self._device_config.identifier
 
     @property
     def name(self) -> str:
-        return self._name
+        """Return device name."""
+        return self._device_config.name
+
+    @property
+    def address(self) -> str:
+        """Return device address."""
+        return self._device_config.address
+
+    @property
+    def log_id(self) -> str:
+        """Return log identifier for this device."""
+        return f"PlexServer[{self.identifier}]"
 
     @property
     def available(self) -> bool:
-        """Return True if device is available."""
-        return self._available
-
-    @available.setter
-    def available(self, value: bool):
-        """Set device availability and emit CONNECTED / DISCONNECTED event on change."""
-        if self._available != value:
-            self._available = value
-            self.events.emit(
-                Events.CONNECTED if value else Events.DISCONNECTED, self.identifier
-            )
+        """Return True if device is available (connected)."""
+        return self.is_connected
 
     @property
     def is_on(self) -> bool | None:
-        """Whether the Apple TV is on or off. Returns None if not connected."""
+        """Whether the player is on (has active session)."""
         if self._plex is None:
             return False
         if self._play_state in ["playing", "paused", "seeking", "buffering"]:
@@ -607,22 +509,22 @@ class PlexDevice:
         return self._play_state
 
     @property
-    def device_config(self) -> PlexConfigDevice:
+    def device_config(self) -> PlexDevice:
         """Return device configuration."""
-        return self._device
+        return self._device_config
 
     @property
     def host(self) -> str:
         """Return the host of the device as string."""
-        return self._device.identifier
+        return self._device_config.identifier
 
     @property
     def _no_active_players(self):
-        """Returns players."""
+        """Returns True if no active players."""
         return not self._players
 
     @property
-    def state(self) -> States:
+    def state(self) -> MediaStates:
         """Return the cached state of the device."""
         return self.get_state()
 
@@ -648,20 +550,10 @@ class PlexDevice:
 
     @property
     def client(self) -> PlexClient:
-        """Return Plex Client."""
-        if not self._client:
-            self._client = self.get_plex_client()
-        return self._client
-
-    def __del__(self):
-        """Cleanup when object is destroyed."""
-        try:
-            if self._http_session and not self._http_session.closed:
-                # Schedule cleanup if event loop is still running
-                if self.event_loop and self.event_loop.is_running():
-                    self.event_loop.create_task(self._http_session.close())
-        except Exception:  # pylint: disable=broad-exception-caught
-            pass
+        """Return Plex Client for sending playback commands."""
+        if not self._plex_client:
+            self._plex_client = self.get_plex_client()
+        return self._plex_client
 
 
 def print_info(msgtype, data, error):
