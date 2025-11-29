@@ -145,8 +145,12 @@ class PlexServer(ExternalClientDevice):
         if self._client:
             try:
                 self._client.close()
-            except Exception:  # pylint: disable=broad-exception-caught
-                pass
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                _LOG.warning(
+                    "Exception occurred while closing PlexWebsocket client: %s",
+                    exc,
+                    exc_info=True,
+                )
 
         # Clear player client reference
         if self._plex_client:

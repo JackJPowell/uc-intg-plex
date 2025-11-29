@@ -58,8 +58,8 @@ async def main():
     setup_handler = PlexSetupFlow.create_handler(driver.config)
     await driver.api.init("driver.json", setup_handler)
 
-    while True:
-        await asyncio.sleep(3600)
+    # Keep the driver running until explicitly cancelled
+    await asyncio.Future()
 
 
 if __name__ == "__main__":

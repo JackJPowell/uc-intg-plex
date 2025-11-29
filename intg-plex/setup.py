@@ -41,17 +41,17 @@ _MANUAL_INPUT_SCHEMA = RequestUserInput(
             },
         },
         {
-            "field": {"text": {"value": "192.168.1.207"}},
+            "field": {"text": {"value": ""}},
             "id": "address",
             "label": {"en": "Host Address", "de": "IP-Adresse", "fr": "Adresse IP"},
         },
         {
-            "field": {"text": {"value": "32400"}},
+            "field": {"text": {"value": ""}},
             "id": "port",
             "label": {"en": "HTTP port", "fr": "Port HTTP"},
         },
         {
-            "field": {"text": {"value": "Y3RKvNYoqY-AhRBKR6ku"}},
+            "field": {"text": {"value": ""}},
             "id": "auth_token",
             "label": {"en": "Auth Token"},
         },
@@ -101,10 +101,10 @@ class PlexSetupFlow(BaseSetupFlow[PlexDevice]):
 
     async def query_device(self, input_values: dict[str, Any]) -> RequestUserInput:
         """
-        Create device from manual entry - returns client list screen.
+        Validate server connection and return a form for client selection.
 
-        This is called after user fills in server connection details.
-        We connect to the server and show available clients.
+        This method is called after the user fills in server connection details.
+        It connects to the Plex server and returns a screen listing available clients for selection.
         """
         address = input_values.get("address", "")
         port = input_values.get("port", "32400")
@@ -141,7 +141,8 @@ class PlexSetupFlow(BaseSetupFlow[PlexDevice]):
             for session in server.sessions():
                 for player in session.players:
                     if (
-                        player.machineIdentifier not in self.config.all()
+                        player.machineIdentifier
+                        not in [d.identifier for d in self.config.all()]
                         and player.local is True
                     ):
                         self._available_clients.append(
@@ -275,7 +276,7 @@ class PlexSetupFlow(BaseSetupFlow[PlexDevice]):
 
     async def handle_additional_configuration_response(
         self, msg: UserDataResponse
-    ) -> SetupAction | RequestUserInput:
+    ) -> SetupAction | RequestUserInput | PlexDevice:
         """
         Handle the artwork selection response and complete setup.
 
@@ -367,10 +368,8 @@ def get_server(
 
 def validate_url(uri):
     """Validate passed in URL and attempts to correct api endpoint if path isn't supplied."""
-    if re.search("^http.*", uri) is None:
-        uri = (
-            "http://" + uri
-        )  # Normalize to absolute URLs so urlparse will parse the way we want
+    if not uri.startswith("http://") and not uri.startswith("https://"):
+        uri = f"http://{uri}"
     parsed_url = urlparse(uri)
     if parsed_url.scheme == "":
         uri = "http://" + uri

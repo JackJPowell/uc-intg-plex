@@ -10,9 +10,8 @@ from typing import Any
 from const import PlexDevice
 from const import PLEX_SIMPLE_COMMANDS
 from plex import PlexServer
-from ucapi import MediaPlayer, StatusCodes, media_player, EntityTypes
+from ucapi import MediaPlayer, StatusCodes, media_player
 from ucapi.media_player import Commands, DeviceClasses, Options
-from ucapi_framework import create_entity_id
 
 _LOG = logging.getLogger(__name__)
 
