@@ -8,7 +8,7 @@ from ucapi.ui import Buttons, DeviceButtonMapping, UiPage
 
 
 @dataclass
-class PlexDevice:
+class PlexConfig:
     """Plex device configuration."""
 
     identifier: str
