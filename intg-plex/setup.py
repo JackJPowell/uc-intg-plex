@@ -8,7 +8,7 @@ import logging
 from typing import Any
 from urllib.parse import urlparse
 
-from const import PlexDevice
+from const import PlexConfig
 from plexapi.myplex import MyPlexAccount
 from plexapi.server import PlexServer
 from ucapi import (
@@ -86,7 +86,7 @@ _MANUAL_INPUT_SCHEMA = RequestUserInput(
 )
 
 
-class PlexSetupFlow(BaseSetupFlow[PlexDevice]):
+class PlexSetupFlow(BaseSetupFlow[PlexConfig]):
     """Plex integration setup flow handler."""
 
     def __init__(self, config_manager, *, discovery=None):
@@ -221,7 +221,7 @@ class PlexSetupFlow(BaseSetupFlow[PlexDevice]):
             return SetupError(error_type=IntegrationSetupError.CONNECTION_REFUSED)
 
     async def get_additional_configuration_screen(
-        self, device_config: PlexDevice, previous_input: dict[str, Any]
+        self, device_config: PlexConfig, previous_input: dict[str, Any]
     ) -> RequestUserInput | None:
         """
         Show artwork selection screen after client is selected.
@@ -279,7 +279,7 @@ class PlexSetupFlow(BaseSetupFlow[PlexDevice]):
 
     async def handle_additional_configuration_response(
         self, msg: UserDataResponse
-    ) -> SetupAction | RequestUserInput | PlexDevice:
+    ) -> SetupAction | RequestUserInput | PlexConfig:
         """
         Handle the artwork selection response and complete setup.
 
@@ -312,7 +312,7 @@ class PlexSetupFlow(BaseSetupFlow[PlexDevice]):
             name = f"{selected_client.get('title', 'Unknown')} ({selected_client.get('product', 'Unknown')})"
 
             # Create device config with server details
-            device = PlexDevice(
+            device = PlexConfig(
                 identifier=machine_identifier,
                 name=name,
                 address=self._pending_device_config["address"],
@@ -336,7 +336,7 @@ class PlexSetupFlow(BaseSetupFlow[PlexDevice]):
         movie_selection = msg.input_values.get("movie_selection", "movie-poster")
 
         # Update the pending device with artwork selections
-        return PlexDevice(
+        return PlexConfig(
             identifier=self._pending_device_config.identifier,
             name=self._pending_device_config.name,
             address=self._pending_device_config.address,

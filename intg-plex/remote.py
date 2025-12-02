@@ -12,7 +12,7 @@ from const import (
     PLEX_REMOTE_BUTTONS_MAPPING,
     PLEX_REMOTE_SIMPLE_COMMANDS,
     PLEX_REMOTE_UI_PAGES,
-    PlexDevice,
+    PlexConfig,
     key_update_helper,
 )
 from plex import PlexServer
@@ -38,7 +38,7 @@ PLEX_REMOTE_STATE_MAPPING = {
 class PlexRemote(Remote):
     """Representation of a Plex Remote entity."""
 
-    def __init__(self, config_device: PlexDevice, device: PlexServer):
+    def __init__(self, config_device: PlexConfig, device: PlexServer):
         """Initialize the class."""
         self._device: PlexServer = device
         _LOG.debug("PlexRemote init")

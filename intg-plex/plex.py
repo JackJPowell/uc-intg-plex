@@ -14,7 +14,7 @@ from io import BytesIO
 from typing import Any
 
 import aiohttp
-from const import PLEX_FEATURES, PlexDevice
+from const import PLEX_FEATURES, PlexConfig
 from PIL import Image
 from plexapi.base import MediaContainer
 from plexapi.myplex import MyPlexAccount
@@ -42,15 +42,13 @@ class PlexServer(ExternalClientDevice):
 
     def __init__(
         self,
-        device: PlexDevice,
+        device_config: PlexConfig,
         loop: AbstractEventLoop | None = None,
         config_manager: Any = None,
     ):
         """Create instance with Plex client."""
-        # Initialize base class with watchdog settings
-        # The ExternalClientDevice provides: self.events, self._device_config, self._loop, self._client
         super().__init__(
-            device,
+            device_config,
             loop,
             enable_watchdog=True,
             watchdog_interval=WEBSOCKET_WATCHDOG_INTERVAL,
@@ -84,7 +82,7 @@ class PlexServer(ExternalClientDevice):
         self._properties = {}
         self._background_tasks: set[asyncio.Task] = set()
 
-        _LOG.debug("Plex instance created: %s", device.identifier)
+        _LOG.debug("Plex instance created: %s", device_config.identifier)
 
     # ─────────────────────────────────────────────────────────────────
     # ExternalClientDevice abstract method implementations
@@ -513,7 +511,7 @@ class PlexServer(ExternalClientDevice):
         return self._play_state
 
     @property
-    def device_config(self) -> PlexDevice:
+    def device_config(self) -> PlexConfig:
         """Return device configuration."""
         return self._device_config
 
