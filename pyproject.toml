@@ -1,6 +1,6 @@
 [project]
 name = "uc-intg-plex"
-version = "1.0.1"
+version = "1.0.2"
 description = "A Python integration for Plex, providing APIs and tools to interact with Plex media servers, including support for real-time events, media management, and user authentication."
 readme = "README.md"
 requires-python = ">=3.11"
