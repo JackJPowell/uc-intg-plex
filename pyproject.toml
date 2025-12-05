@@ -6,7 +6,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
 "ucapi>=0.4.0,<0.5.0",
-"ucapi-framework>=1.1.0,<2.0.0",
+"ucapi-framework==1.2.1",
 "aiohttp>=3.9.3,<4.0.0",
 "plexapi>=4.17.2,<5.0.0",
 "plexwebsocket>=0.0.14,<0.1.0",
