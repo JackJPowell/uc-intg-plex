@@ -9,7 +9,6 @@ import base64
 import io
 import logging
 from asyncio import AbstractEventLoop
-from datetime import UTC, datetime
 from io import BytesIO
 from typing import Any
 
@@ -21,14 +20,18 @@ from plexapi.myplex import MyPlexAccount
 from plexapi.server import PlexClient
 from plexapi.server import PlexServer as PlexApiServer
 from plexwebsocket import SIGNAL_CONNECTION_STATE, STATE_CONNECTED, PlexWebsocket
-from ucapi.media_player import Attributes as MediaAttr
+from ucapi.media_player import EntityTypes
 from ucapi.media_player import (
     Features,
     MediaType,
 )
 from ucapi.media_player import States as MediaStates
-from ucapi_framework import ExternalClientDevice
-from ucapi_framework.device import DeviceEvents
+from ucapi_framework import (
+    ExternalClientDevice,
+    BaseIntegrationDriver,
+    create_entity_id,
+)
+from ucapi_framework.helpers import MediaPlayerAttributes
 
 _LOG = logging.getLogger(__name__)
 
@@ -45,6 +48,7 @@ class PlexServer(ExternalClientDevice):
         device_config: PlexConfig,
         loop: AbstractEventLoop | None = None,
         config_manager: Any = None,
+        driver: BaseIntegrationDriver | None = None,
     ):
         """Create instance with Plex client."""
         super().__init__(
@@ -55,6 +59,7 @@ class PlexServer(ExternalClientDevice):
             reconnect_delay=5,
             max_reconnect_attempts=CONNECTION_RETRIES,
             config_manager=config_manager,
+            driver=driver,
         )
 
         self.event_loop = self._loop
@@ -64,27 +69,18 @@ class PlexServer(ExternalClientDevice):
         self._plex_client: PlexClient | None = (
             None  # Player client for sending commands
         )
-        self._supported_features = PLEX_FEATURES
-        self._play_state = None
-        self._key = None
-        self._view_offset = None
-        self._players: list[Any, Any] = None
-        self._session: MediaContainer = None
-        self._is_on: bool | None = False
-
-        self._connect_error = False
-        self._volume = 0
-        self._is_volume_muted = False
-        self._media_image_url = ""
+        self._session: MediaContainer | None = None
         self._image_cache = None
         self._image_cache_url = None
-
-        self._properties = {}
         self._background_tasks: set[asyncio.Task] = set()
 
-        _LOG.debug("Plex instance created: %s", device_config.identifier)
+        # Initialize attributes using MediaPlayerAttributes dataclass
+        self.attributes = MediaPlayerAttributes()
 
-    # ─────────────────────────────────────────────────────────────────
+        _LOG.debug(
+            "Plex instance created: %s", device_config.identifier
+        )  # ─────────────────────────────────────────────────────────────────
+
     # ExternalClientDevice abstract method implementations
     # ─────────────────────────────────────────────────────────────────
 
@@ -188,9 +184,10 @@ class PlexServer(ExternalClientDevice):
         )
         if self._session:
             self._plex_client = self.get_plex_client()
-            self._is_on = self._plex_client is not None
+            if self._plex_client:
+                self.attributes.STATE = MediaStates.ON
         else:
-            self._is_on = False
+            self.attributes.STATE = MediaStates.OFF
 
     def _get_plex_server(self) -> PlexApiServer | None:
         """Get a reference to the PMS (stateless HTTP connection)."""
@@ -214,27 +211,16 @@ class PlexServer(ExternalClientDevice):
 
     def get_state(self) -> MediaStates:
         """Get state of device."""
-        if self._play_state == "paused":
-            return MediaStates.PAUSED
-        if self._play_state == "playing":
-            return MediaStates.PLAYING
-        if self._play_state == "stopped":
-            return MediaStates.OFF
-        if self.is_on:
-            return MediaStates.ON
-        if self._no_active_players:
-            return MediaStates.OFF
-        return MediaStates.OFF
+        return getattr(self.attributes, "STATE", MediaStates.OFF)
 
-    def _reset_state(self, players=None):
-        self._players = players
-        self._properties = {}
+    def _reset_state(self):
+        # Reset attributes to new MediaPlayerAttributes instance
+        self.attributes = MediaPlayerAttributes()
         # Clear image cache to free memory
         self._image_cache = None
 
     def _plex_ws_updates(self, msgtype, data, error) -> None:
         """Handle WS Messages from PlexWebsocket."""
-        updated_data = {}
         payload = None
 
         if msgtype == "playing" or msgtype == "progress":
@@ -251,23 +237,25 @@ class PlexServer(ExternalClientDevice):
 
                         if payload:
                             # Update state immediately from websocket data
-                            self._play_state = payload["state"]
+                            play_state = payload["state"]
 
-                            if payload["state"] == "stopped":
+                            if play_state == "stopped":
                                 self._image_cache = None
-                                self._is_on = False
-                                updated_data[MediaAttr.STATE] = self.get_state()
-                            else:
-                                self._is_on = True
-                                updated_data[MediaAttr.STATE] = self.get_state()
-                                self._view_offset = payload["viewOffset"] / 1000
-                                updated_data[MediaAttr.MEDIA_POSITION] = (
-                                    self._view_offset
+                                self.attributes.STATE = MediaStates.OFF
+                            elif play_state == "paused":
+                                self.attributes.STATE = MediaStates.PAUSED
+                                media_position = payload["viewOffset"] / 1000
+                                self.attributes.MEDIA_POSITION = int(media_position)
+                                # Fetch full session details asynchronously
+                                self._create_task(
+                                    self._fetch_session_details(
+                                        payload, self.identifier
+                                    )
                                 )
-                                updated_data[MediaAttr.MEDIA_POSITION_UPDATED_AT] = (
-                                    datetime.now(tz=UTC).isoformat()
-                                )
-
+                            elif play_state == "playing":
+                                self.attributes.STATE = MediaStates.PLAYING
+                                media_position = payload["viewOffset"] / 1000
+                                self.attributes.MEDIA_POSITION = int(media_position)
                                 # Fetch full session details asynchronously
                                 self._create_task(
                                     self._fetch_session_details(
@@ -275,9 +263,12 @@ class PlexServer(ExternalClientDevice):
                                     )
                                 )
 
-        if updated_data:
-            self.events.emit(DeviceEvents.UPDATE, self.identifier, updated_data)
-
+        # Update entity with current attributes
+        if self._driver:
+            entity_id = create_entity_id(EntityTypes.MEDIA_PLAYER, self.identifier)
+            entity = self._driver.get_entity_by_id(entity_id)
+            if entity:
+                entity.update(self.attributes)
         if error:
             _LOG.debug(error)
 
@@ -293,7 +284,6 @@ class PlexServer(ExternalClientDevice):
                 return
 
             self._session = session
-            self._key = payload["key"]
 
             if session.TYPE == "audio":
                 media_type = MediaType.MUSIC
@@ -304,14 +294,22 @@ class PlexServer(ExternalClientDevice):
             else:
                 media_type = ""
 
-            updated_data = {
-                MediaAttr.MEDIA_DURATION: session.duration / 1000,
-                MediaAttr.MEDIA_TYPE: media_type,
-                MediaAttr.MEDIA_TITLE: session.title,
-            }
+            # Build updated data with safe attribute access
+            duration = getattr(session, "duration", 0)
+            title = getattr(session, "title", "")
+            duration_seconds = int(
+                duration / 1000 if isinstance(duration, (int, float)) else 0
+            )
 
-            if session.type == "episode":
-                updated_data[MediaAttr.MEDIA_ARTIST] = session.seasonEpisode.upper()
+            # Update attributes dataclass
+            self.attributes.MEDIA_DURATION = duration_seconds
+            self.attributes.MEDIA_TYPE = media_type
+            self.attributes.MEDIA_TITLE = title
+
+            if hasattr(session, "type") and session.type == "episode":
+                season_episode = getattr(session, "seasonEpisode", "")
+                if season_episode and isinstance(season_episode, str):
+                    self.attributes.MEDIA_ARTIST = season_episode.upper()
 
             # Get artwork URL
             url = self._get_artwork_url(session)
@@ -319,11 +317,20 @@ class PlexServer(ExternalClientDevice):
             # Fetch image asynchronously
             self._create_task(self._fetch_and_update_image(url, identifier))
 
-            # Send immediate update with available data
-            self.events.emit(DeviceEvents.UPDATE, identifier, updated_data)
+            # Update entity with current attributes
+            if self._driver:
+                entity_id = create_entity_id(EntityTypes.MEDIA_PLAYER, identifier)
+                entity = self._driver.get_entity_by_id(entity_id)
+                if entity:
+                    entity.update(self.attributes)
 
-        except Exception as ex:
-            _LOG.error("Failed to fetch session details: %s", ex)
+        except Exception as ex:  # pylint: disable=broad-exception-caught
+            _LOG.error(
+                "Failed to fetch session details for %s: %s",
+                identifier,
+                ex,
+                exc_info=True,
+            )
 
     def _get_artwork_url(self, session) -> str:
         """Get artwork URL based on configuration."""
@@ -348,24 +355,29 @@ class PlexServer(ExternalClientDevice):
                         return session.artUrl
                     case _:
                         return session.posterUrl
-        except Exception:
-            if session.type == "episode":
-                return self.build_plex_url(session.grandparentThumb)
-            else:
-                return session.posterUrl
+        except (AttributeError, KeyError) as ex:
+            _LOG.debug("Error getting artwork URL, using fallback: %s", ex)
+            # Fallback to default artwork
+            try:
+                if session.type == "episode":
+                    return self.build_plex_url(session.grandparentThumb)
+                else:
+                    return session.posterUrl
+            except (AttributeError, KeyError):
+                return ""
 
     async def _fetch_and_update_image(self, url: str, identifier: str):
         """Fetch image asynchronously and emit update event."""
         try:
             image_data = await self.store_image_as_base64(url, 400)
             if image_data:
-                self._media_image_url = image_data
-                # Emit update with the new artwork
-                self.events.emit(
-                    DeviceEvents.UPDATE,
-                    identifier,
-                    {MediaAttr.MEDIA_IMAGE_URL: image_data},
-                )
+                self.attributes.MEDIA_IMAGE_URL = image_data
+                # Update entity with new artwork
+                if self._driver:
+                    entity_id = create_entity_id(EntityTypes.MEDIA_PLAYER, identifier)
+                    entity = self._driver.get_entity_by_id(entity_id)
+                    if entity:
+                        entity.update(self.attributes)
         except Exception as ex:  # pylint: disable=broad-exception-caught
             _LOG.error("Failed to fetch and update image: %s", ex)
 
@@ -406,20 +418,27 @@ class PlexServer(ExternalClientDevice):
                                 (new_width, new_height), Image.Resampling.LANCZOS
                             )
 
-                            byte_image = io.BytesIO()
-                            resized_image.save(byte_image, format="PNG")
-                            byte_image = byte_image.getvalue()
+                            resized_bytes = io.BytesIO()
+                            resized_image.save(resized_bytes, format="PNG")
+                            resized_bytes_value = resized_bytes.getvalue()
 
-                            image_b64 = base64.b64encode(byte_image).decode("utf-8")
+                            image_b64 = base64.b64encode(resized_bytes_value).decode(
+                                "utf-8"
+                            )
                             self._image_cache = f"data:image/png;base64,{image_b64}"
                             self._image_cache_url = url
+                            return self._image_cache
             except Exception as ex:  # pylint: disable=broad-exception-caught
                 _LOG.error("Failed to fetch image from %s: %s", url, ex)
                 return ""
-        return self._image_cache
+        return self._image_cache if self._image_cache else ""
 
     def build_plex_url(self, path: str) -> str:
-        """Build a plex url from config and supplied path"""
+        """Build a plex url from config and supplied path."""
+        if not path:
+            _LOG.warning("Empty path provided to build_plex_url")
+            return ""
+
         config = self._device_config
         # Ensure address has http:// scheme
         address = config.address
@@ -427,9 +446,9 @@ class PlexServer(ExternalClientDevice):
             address = f"http://{address}"
         return f"{address}:{config.port}{path}?X-Plex-Token={config.auth_token}"
 
-    def get_players(self) -> list[Any, Any]:
+    def get_players(self) -> list[Any]:
         """Get active players from session."""
-        self._players = None
+        self._players = []
         if self._plex:
             for session in self._plex.sessions():
                 for player in session.players:
@@ -439,7 +458,7 @@ class PlexServer(ExternalClientDevice):
     def get_session_by_client_id(self, identifier) -> MediaContainer | None:
         """Get session by client identifier."""
         if not self._plex:
-            self.get_players()
+            return None
         for session in self._plex.sessions():
             for player in session.players:
                 if player.machineIdentifier == identifier and player.local is True:
@@ -450,19 +469,17 @@ class PlexServer(ExternalClientDevice):
         """Get client from session for sending playback commands."""
         if self._session:
             try:
-                self._plex_client = self._session.player
+                self._plex_client = self._session.player  # ty:ignore[unresolved-attribute]
                 self._plex_client.proxyThroughServer(True, self._plex)
 
                 return self._plex_client
             except Exception as ex:  # pylint: disable=broad-exception-caught
                 _LOG.error(
                     "Unable to connect to client (%s) %s",
-                    self._session.player.device,
+                    self._session.player.device,  # ty:ignore[unresolved-attribute]
                     ex,
                 )
-        updated_data = {}
-        updated_data[MediaAttr.STATE] = self.get_state()
-        self.events.emit(DeviceEvents.UPDATE, self.identifier, updated_data)
+        # self.events.emit(DeviceEvents.UPDATE, self.identifier, {MediaAttr.STATE: self.get_state()})
         return None
 
     # ─────────────────────────────────────────────────────────────────
@@ -497,18 +514,20 @@ class PlexServer(ExternalClientDevice):
     @property
     def is_on(self) -> bool | None:
         """Whether the player is on (has active session)."""
-        if self._plex is None:
-            return False
-        if self._play_state in ["playing", "paused", "seeking", "buffering"]:
-            self._is_on = True
-        return self._is_on
+        state = getattr(self.attributes, "STATE", None)
+        return state not in [MediaStates.OFF, MediaStates.UNKNOWN, None]
 
     @property
     def play_state(self) -> str | None:
         """Return the play state of the device."""
-        if self._play_state is None:
-            return None
-        return self._play_state
+        state = getattr(self.attributes, "STATE", None)
+        if state == MediaStates.PLAYING:
+            return "playing"
+        elif state == MediaStates.PAUSED:
+            return "paused"
+        elif state == MediaStates.OFF:
+            return "stopped"
+        return None
 
     @property
     def device_config(self) -> PlexConfig:
@@ -521,11 +540,6 @@ class PlexServer(ExternalClientDevice):
         return self._device_config.identifier
 
     @property
-    def _no_active_players(self):
-        """Returns True if no active players."""
-        return not self._players
-
-    @property
     def state(self) -> MediaStates:
         """Return the cached state of the device."""
         return self.get_state()
@@ -533,34 +547,39 @@ class PlexServer(ExternalClientDevice):
     @property
     def supported_features(self) -> list[Features]:
         """Return supported features."""
-        return self._supported_features
+        return PLEX_FEATURES
 
     @property
     def is_volume_muted(self) -> bool:
         """Return boolean if volume is currently muted."""
-        return self._is_volume_muted
+        return getattr(self.attributes, "MUTED", False)
 
     @property
     def volume_level(self) -> float | None:
         """Volume level of the media player (0..100)."""
-        return self._volume
+        return getattr(self.attributes, "VOLUME", 0)
 
     @property
     def media_image_url(self) -> str:
         """Image url of current playing media."""
-        return self._media_image_url
+        return getattr(self.attributes, "MEDIA_IMAGE_URL", "")
 
     @property
-    def client(self) -> PlexClient:
+    def client(self) -> PlexClient | None:
         """Return Plex Client for sending playback commands."""
         if not self._plex_client:
             self._plex_client = self.get_plex_client()
         return self._plex_client
 
+    def get_device_attributes(self, entity_id: str) -> MediaPlayerAttributes:
+        """
+        Get current device attributes for entity updates.
 
-def print_info(msgtype, data, error):
-    """Print info."""
-    if msgtype == SIGNAL_CONNECTION_STATE:
-        _LOG.debug("State: %s / Error: %s", data, error)
-    else:
-        _LOG.debug("Data: %s", data)
+        Part of ucapi-framework v1.7.2 pattern - provides a centralized way
+        to get all current device state for entity updates. This is called
+        by the framework when entities need to refresh their state.
+
+        :param entity_id: The entity ID requesting attributes
+        :return: MediaPlayerAttributes dataclass with current device state
+        """
+        return self.attributes

@@ -1,7 +1,6 @@
 """Constants used for Plex integration."""
 
 from dataclasses import dataclass
-from typing import List
 
 from ucapi.media_player import Commands, Features, MediaType
 from ucapi.ui import Buttons, DeviceButtonMapping, UiPage
@@ -68,7 +67,7 @@ PLEX_SIMPLE_COMMANDS = {}
 
 PLEX_ACTIONS_KEYMAP = {}
 
-PLEX_REMOTE_BUTTONS_MAPPING: List[DeviceButtonMapping] = [
+PLEX_REMOTE_BUTTONS_MAPPING: list[DeviceButtonMapping] = [  # type: ignore[assignment]
     {"button": Buttons.BACK, "short_press": {"cmd_id": Commands.BACK}},
     {"button": Buttons.HOME, "short_press": {"cmd_id": Commands.HOME}},
     {"button": Buttons.CHANNEL_DOWN, "short_press": {"cmd_id": Commands.CHANNEL_DOWN}},
@@ -96,7 +95,7 @@ PLEX_REMOTE_SIMPLE_COMMANDS = [
     Commands.REWIND,
 ]
 
-PLEX_REMOTE_UI_PAGES: List[UiPage] = [
+PLEX_REMOTE_UI_PAGES: list[UiPage] = [  # type: ignore[assignment]
     {
         "page_id": "Plex commands",
         "name": "Plex commands",

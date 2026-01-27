@@ -11,11 +11,12 @@ from const import PLEX_SIMPLE_COMMANDS, PlexConfig
 from plex import PlexServer
 from ucapi import MediaPlayer, StatusCodes, media_player
 from ucapi.media_player import Commands, DeviceClasses, Options
+from ucapi_framework import Entity, create_entity_id
 
 _LOG = logging.getLogger(__name__)
 
 
-class PlexMediaPlayer(MediaPlayer):
+class PlexMediaPlayer(Entity, MediaPlayer):
     """Representation of a Plex Media Player entity."""
 
     def __init__(self, config_device: PlexConfig, device: PlexServer):
@@ -23,7 +24,9 @@ class PlexMediaPlayer(MediaPlayer):
         self._device: PlexServer = device
         _LOG.debug("PlexMediaPlayer init")
 
-        entity_id = config_device.identifier
+        entity_id = create_entity_id(
+            media_player.EntityTypes.MEDIA_PLAYER, config_device.identifier
+        )
         features = device.supported_features
 
         options = {Options.SIMPLE_COMMANDS: list(PLEX_SIMPLE_COMMANDS.keys())}
@@ -43,11 +46,15 @@ class PlexMediaPlayer(MediaPlayer):
             },
             device_class=DeviceClasses.TV,
             options=options,
-            cmd_handler=self.command,
+            cmd_handler=self.command_handler,
         )
 
-    async def command(
-        self, cmd_id: str, params: dict[str, Any] | None = None
+    async def command_handler(
+        self,
+        _entity: MediaPlayer,
+        cmd_id: str,
+        params: dict[str, Any] | None,
+        _: Any | None = None,
     ) -> StatusCodes:
         """
         Media-player entity command handler.
@@ -65,11 +72,17 @@ class PlexMediaPlayer(MediaPlayer):
             return StatusCodes.SERVICE_UNAVAILABLE
         client = self._device.client
 
+        if client is None:
+            _LOG.warning("No Plex client available for entity: %s", self.id)
+            return StatusCodes.SERVICE_UNAVAILABLE
+
         try:
             if cmd_id == Commands.VOLUME:
-                client.setVolume(params.get("volume"))
-                self._device._is_volume_muted = False
-                self._device._volume = params.get("volume")
+                if params:
+                    volume = params.get("volume")
+                    client.setVolume(volume)
+                    self._device.attributes.MUTED = False
+                    self._device.attributes.VOLUME = volume
             elif cmd_id == Commands.PLAY_PAUSE or cmd_id == Commands.CURSOR_ENTER:
                 if self._device.play_state == "playing":
                     client.pause()
@@ -77,7 +90,7 @@ class PlexMediaPlayer(MediaPlayer):
                     client.play()
             elif cmd_id == Commands.MUTE:
                 client.setVolume(0)
-                self._device._is_volume_muted = True
+                self._device.attributes.MUTED = True
             elif cmd_id == Commands.STOP:
                 client.stop()
             elif cmd_id in [Commands.NEXT, Commands.CURSOR_RIGHT]:
@@ -91,8 +104,9 @@ class PlexMediaPlayer(MediaPlayer):
             elif cmd_id == Commands.REWIND:
                 client.skipPrevious()
             elif cmd_id == Commands.SEEK:
-                media_position = params.get("media_position", 0)
-                client.seekTo(media_position * 1000)
+                if params:
+                    media_position = params.get("media_position", 0)
+                    client.seekTo(media_position * 1000)
             elif cmd_id in [Commands.MENU, Commands.BACK]:
                 client.goBack()
             elif cmd_id == Commands.CONTEXT_MENU:

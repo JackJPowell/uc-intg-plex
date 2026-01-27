@@ -13,7 +13,6 @@ from const import (
     PLEX_REMOTE_SIMPLE_COMMANDS,
     PLEX_REMOTE_UI_PAGES,
     PlexConfig,
-    key_update_helper,
 )
 from plex import PlexServer
 from ucapi import EntityTypes, Remote, StatusCodes
@@ -51,19 +50,26 @@ class PlexRemote(Remote):
             features,
             attributes,
             simple_commands=PLEX_REMOTE_SIMPLE_COMMANDS,
-            button_mapping=PLEX_REMOTE_BUTTONS_MAPPING,
-            ui_pages=PLEX_REMOTE_UI_PAGES,
+            button_mapping=PLEX_REMOTE_BUTTONS_MAPPING,  # ty:ignore[invalid-argument-type]
+            ui_pages=PLEX_REMOTE_UI_PAGES,  # ty:ignore[invalid-argument-type]
+            cmd_handler=self.command_handler,
         )
 
-    def get_int_param(self, param: str, params: dict[str, Any], default: int):
+    def get_int_param(self, param: str, params: dict[str, Any] | None, default: int):
         """Get parameter in integer format."""
+        if params is None:
+            return default
         value = params.get(param, default)
         if isinstance(value, str) and len(value) > 0:
             return int(float(value))
         return default
 
-    async def command(
-        self, cmd_id: str, params: dict[str, Any] | None = None
+    async def command_handler(
+        self,
+        _entity: Remote,
+        cmd_id: str,
+        params: dict[str, Any] | None,
+        _: Any | None = None,
     ) -> StatusCodes:
         """
         Media-player entity command handler.
@@ -101,9 +107,9 @@ class PlexRemote(Remote):
             if command == MediaPlayerCommands.VOLUME:
                 client.setVolume(params.get("volume"))
             elif command == MediaPlayerCommands.PLAY_PAUSE:
-                if self._device._play_state == "playing":
+                if self._device.play_state == "playing":
                     client.pause()
-                elif self._device._play_state == "paused":
+                elif self._device.play_state == "paused":
                     client.play()
             elif command == MediaPlayerCommands.MUTE:
                 client.setVolume(0)
@@ -157,21 +163,3 @@ class PlexRemote(Remote):
                 ex,
             )
             return StatusCodes.OK
-
-    def filter_changed_attributes(self, update: dict[str, Any]) -> dict[str, Any]:
-        """
-        Filter the given attributes and return only the changed values.
-
-        :param update: dictionary with attributes.
-        :return: filtered entity attributes containing changed attributes only.
-        """
-        attributes = {}
-
-        if Attributes.STATE in update:
-            state = PLEX_REMOTE_STATE_MAPPING.get(update[Attributes.STATE])
-            attributes = key_update_helper(
-                self.attributes, Attributes.STATE, state, attributes
-            )
-
-        _LOG.debug("Plex Remote update attributes %s -> %s", update, attributes)
-        return attributes

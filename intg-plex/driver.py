@@ -15,23 +15,8 @@ from setup import PlexSetupFlow
 from ucapi_framework import BaseConfigManager, BaseIntegrationDriver, get_config_path
 
 
-class PlexIntegrationDriver(BaseIntegrationDriver[PlexServer, PlexConfig]):
-    """Plex Integration Driver"""
-
-    def device_from_entity_id(self, entity_id: str) -> str | None:
-        """
-        Extract device identifier from entity identifier.
-
-        For Plex, the entity_id IS the device identifier.
-
-        :param entity_id: Entity identifier
-        :return: Device identifier
-        """
-        return entity_id
-
-
 async def main():
-    """Start the Remote Two integration driver."""
+    """Start the Remote integration driver."""
     logging.basicConfig()
 
     level = os.getenv("UC_LOG_LEVEL", "DEBUG").upper()
@@ -40,8 +25,10 @@ async def main():
     logging.getLogger("plex").setLevel(level)
     logging.getLogger("setup_flow").setLevel(level)
 
-    driver = PlexIntegrationDriver(
-        device_class=PlexServer, entity_classes=[PlexMediaPlayer]
+    driver = BaseIntegrationDriver(
+        device_class=PlexServer,
+        entity_classes=[PlexMediaPlayer],
+        driver_id="plex_driver",
     )
 
     driver.config_manager = BaseConfigManager(
@@ -51,7 +38,7 @@ async def main():
         config_class=PlexConfig,
     )
 
-    await driver.register_all_configured_devices()
+    await driver.register_all_device_instances()
 
     setup_handler = PlexSetupFlow.create_handler(driver)
     await driver.api.init("driver.json", setup_handler)

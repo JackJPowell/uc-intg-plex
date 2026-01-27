@@ -9,6 +9,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from const import PlexConfig
+from packaging.version import Version
 from plexapi.myplex import MyPlexAccount
 from plexapi.server import PlexServer
 from ucapi import (
@@ -18,87 +19,90 @@ from ucapi import (
     SetupError,
     UserDataResponse,
 )
-from ucapi_framework import BaseSetupFlow
+from ucapi_framework import BaseSetupFlow, MigrationData, EntityMigrationMapping
 
 _LOG = logging.getLogger(__name__)
-
-
-_MANUAL_INPUT_SCHEMA = RequestUserInput(
-    {"en": "Connection Details"},
-    [
-        {
-            "id": "info",
-            "label": {
-                "en": "There are two options for establishing a connection to your Plex server. Please fill out one",
-            },
-            "field": {
-                "label": {
-                    "value": {
-                        "en": "Local Direct",
-                    }
-                }
-            },
-        },
-        {
-            "field": {"text": {"value": ""}},
-            "id": "address",
-            "label": {"en": "Host Address", "de": "IP-Adresse", "fr": "Adresse IP"},
-        },
-        {
-            "field": {"text": {"value": ""}},
-            "id": "port",
-            "label": {"en": "HTTP port", "fr": "Port HTTP"},
-        },
-        {
-            "field": {"text": {"value": ""}},
-            "id": "auth_token",
-            "label": {"en": "Auth Token"},
-        },
-        {
-            "id": "info2",
-            "label": {
-                "en": "Internet Required",
-            },
-            "field": {
-                "label": {
-                    "value": {
-                        "en": "MyPlex",
-                    }
-                }
-            },
-        },
-        {
-            "field": {"text": {"value": ""}},
-            "id": "server",
-            "label": {"en": "Plex Server Name"},
-        },
-        {
-            "field": {"text": {"value": ""}},
-            "id": "username",
-            "label": {"en": "Username", "fr": "Utilisateur"},
-        },
-        {
-            "field": {"text": {"value": ""}},
-            "id": "password",
-            "label": {"en": "Password", "fr": "Mot de passe"},
-        },
-    ],
-)
 
 
 class PlexSetupFlow(BaseSetupFlow[PlexConfig]):
     """Plex integration setup flow handler."""
 
-    def __init__(self, config_manager, *, discovery=None):
+    def __init__(self, config_manager, *, driver, discovery=None, device_class=None):
         """Initialize setup flow with state tracking."""
-        super().__init__(config_manager, discovery=discovery)
+        super().__init__(config_manager, discovery=discovery, driver=driver, device_class=device_class)
         self._available_clients = []  # Store client list across screens
 
     def get_manual_entry_form(self) -> RequestUserInput:
         """Get the manual entry form for Plex server connection."""
-        return _MANUAL_INPUT_SCHEMA
+        return RequestUserInput(
+            {"en": "Connection Details"},
+            [
+                {
+                    "id": "info",
+                    "label": {
+                        "en": "There are two options for establishing a connection to your Plex server. Please fill out one",
+                    },
+                    "field": {
+                        "label": {
+                            "value": {
+                                "en": "Local Direct",
+                            }
+                        }
+                    },
+                },
+                {
+                    "field": {"text": {"value": ""}},
+                    "id": "address",
+                    "label": {
+                        "en": "Host Address",
+                        "de": "IP-Adresse",
+                        "fr": "Adresse IP",
+                    },
+                },
+                {
+                    "field": {"text": {"value": ""}},
+                    "id": "port",
+                    "label": {"en": "HTTP port", "fr": "Port HTTP"},
+                },
+                {
+                    "field": {"text": {"value": ""}},
+                    "id": "auth_token",
+                    "label": {"en": "Auth Token"},
+                },
+                {
+                    "id": "info2",
+                    "label": {
+                        "en": "Internet Required",
+                    },
+                    "field": {
+                        "label": {
+                            "value": {
+                                "en": "MyPlex",
+                            }
+                        }
+                    },
+                },
+                {
+                    "field": {"text": {"value": ""}},
+                    "id": "server",
+                    "label": {"en": "Plex Server Name"},
+                },
+                {
+                    "field": {"text": {"value": ""}},
+                    "id": "username",
+                    "label": {"en": "Username", "fr": "Utilisateur"},
+                },
+                {
+                    "field": {"text": {"value": ""}},
+                    "id": "password",
+                    "label": {"en": "Password", "fr": "Mot de passe"},
+                },
+            ],
+        )
 
-    async def query_device(self, input_values: dict[str, Any]) -> RequestUserInput:
+    async def query_device(
+        self, input_values: dict[str, Any]
+    ) -> RequestUserInput | SetupError:
         """
         Validate server connection and return a form for client selection.
 
@@ -129,7 +133,7 @@ class PlexSetupFlow(BaseSetupFlow[PlexConfig]):
                 address = server._baseurl
 
             # Store server config for later use
-            self._pending_device_config = {
+            self._pending_device_config = {  # ty:ignore[invalid-assignment]
                 "address": address,
                 "port": port,
                 "username": username,
@@ -289,7 +293,7 @@ class PlexSetupFlow(BaseSetupFlow[PlexConfig]):
         if "retry" in msg.input_values and "player" not in msg.input_values:
             # Return to manual entry to re-scan for clients
             # Pass the server config stored in _pending_device_config
-            return await self.query_device(self._pending_device_config)
+            return await self.query_device(self._pending_device_config)  # ty:ignore[invalid-argument-type]
 
         # Check if we're selecting a client (pending device is still a dict, not PlexDevice)
         if "player" in msg.input_values and isinstance(
@@ -315,12 +319,12 @@ class PlexSetupFlow(BaseSetupFlow[PlexConfig]):
             device = PlexConfig(
                 identifier=machine_identifier,
                 name=name,
-                address=self._pending_device_config["address"],
-                port=self._pending_device_config["port"],
-                username=self._pending_device_config["username"],
-                password=self._pending_device_config["password"],
-                auth_token=self._pending_device_config["auth_token"],
-                server_name=self._pending_device_config["server_name"],
+                address=self._pending_device_config["address"],  # ty:ignore[invalid-argument-type]
+                port=self._pending_device_config["port"],  # ty:ignore[invalid-argument-type]
+                username=self._pending_device_config["username"],  # ty:ignore[invalid-argument-type]
+                password=self._pending_device_config["password"],  # ty:ignore[invalid-argument-type]
+                auth_token=self._pending_device_config["auth_token"],  # ty:ignore[invalid-argument-type]
+                server_name=self._pending_device_config["server_name"],  # ty:ignore[invalid-argument-type]
                 tv_selection="",  # Will be set in next screen
                 movie_selection="",
             )
@@ -329,7 +333,7 @@ class PlexSetupFlow(BaseSetupFlow[PlexConfig]):
             self._pending_device_config = device
             return await self.get_additional_configuration_screen(
                 device, msg.input_values
-            )
+            )  # ty:ignore[invalid-return-type]
 
         # User completed artwork selection
         tv_selection = msg.input_values.get("tv_selection", "tv-poster-series")
@@ -349,10 +353,48 @@ class PlexSetupFlow(BaseSetupFlow[PlexConfig]):
             movie_selection=movie_selection,
         )
 
+    async def is_migration_required(self, previous_version: str) -> bool:
+        """
+        Check if migration is required for existing configuration.
+
+        :param previous_version: Previous version of the integration
+        :return: True if migration is required, False otherwise
+        """
+        # Migrations required for versions 1.0.2 and below
+        if Version(previous_version) <= Version("1.0.2"):
+            return True
+        return False
+
+    async def get_migration_data(
+        self, previous_version: str, current_version: str
+    ) -> MigrationData:
+        """Generate entity ID mappings for migration.
+
+        Returns:
+            MigrationData with driver IDs and entity mappings
+        """
+
+        mappings: list[EntityMigrationMapping] = []
+
+        # Iterate through all configured devices
+        for device in self.config.all():
+            mappings.append(
+                {
+                    "previous_entity_id": f"{device.identifier}",
+                    "new_entity_id": f"media_player.{device.identifier}",
+                }
+            )
+
+        return {
+            "previous_driver_id": "plex_driver",
+            "new_driver_id": "plex_driver",
+            "entity_mappings": mappings,
+        }
+
 
 def get_server(
     server_name, username, password, auth_token, url="", port=""
-) -> PlexServer:
+) -> PlexServer | SetupError:
     """Get plex server."""
     address = f"{url}:{port}"
     try:
