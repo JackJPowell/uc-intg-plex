@@ -101,7 +101,9 @@ class PlexRemote(Remote):
         command = params.get("command", "")
 
         client = self._device.client
-        client.connect()
+        if client is None:
+            _LOG.warning("No Plex client available for entity: %s", self.id)
+            return StatusCodes.SERVICE_UNAVAILABLE
 
         try:
             if command == MediaPlayerCommands.VOLUME:
