@@ -9,14 +9,15 @@ from typing import Any
 
 from const import PLEX_SIMPLE_COMMANDS, PlexConfig
 from plex import PlexServer
-from ucapi import MediaPlayer, StatusCodes, media_player
+from ucapi import StatusCodes, media_player
 from ucapi.media_player import Commands, DeviceClasses, Options
-from ucapi_framework import Entity, create_entity_id
+from ucapi_framework import create_entity_id
+from ucapi_framework.entities import MediaPlayerEntity
 
 _LOG = logging.getLogger(__name__)
 
 
-class PlexMediaPlayer(Entity, MediaPlayer):
+class PlexMediaPlayer(MediaPlayerEntity):
     """Representation of a Plex Media Player entity."""
 
     def __init__(self, config_device: PlexConfig, device: PlexServer):
@@ -49,9 +50,22 @@ class PlexMediaPlayer(Entity, MediaPlayer):
             cmd_handler=self.command_handler,
         )
 
+        # Subscribe to device push updates — sync_state() is called on every push_update()
+        self.subscribe_to_device(device)
+
+    async def sync_state(self) -> None:
+        """
+        Sync entity state from device.
+
+        Called automatically when the device calls push_update() or on reconnect.
+        Reads fresh state from the device and pushes changes to the Remote.
+        """
+        attrs = self._device.get_media_player_attributes()
+        self.update(attrs)
+
     async def command_handler(
         self,
-        _entity: MediaPlayer,
+        _entity: MediaPlayerEntity,
         cmd_id: str,
         params: dict[str, Any] | None,
         _: Any | None = None,
@@ -81,8 +95,8 @@ class PlexMediaPlayer(Entity, MediaPlayer):
                 if params:
                     volume = params.get("volume")
                     client.setVolume(volume)
-                    self._device.attributes.MUTED = False
-                    self._device.attributes.VOLUME = volume
+                    self.set_muted(False)
+                    self.set_volume(volume, update=True)
             elif cmd_id == Commands.PLAY_PAUSE or cmd_id == Commands.CURSOR_ENTER:
                 if self._device.play_state == "playing":
                     client.pause()
@@ -90,7 +104,7 @@ class PlexMediaPlayer(Entity, MediaPlayer):
                     client.play()
             elif cmd_id == Commands.MUTE:
                 client.setVolume(0)
-                self._device.attributes.MUTED = True
+                self.set_muted(True, update=True)
             elif cmd_id == Commands.STOP:
                 client.stop()
             elif cmd_id in [Commands.NEXT, Commands.CURSOR_RIGHT]:

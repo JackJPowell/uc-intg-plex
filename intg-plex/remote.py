@@ -15,12 +15,13 @@ from const import (
     PlexConfig,
 )
 from plex import PlexServer
-from ucapi import EntityTypes, Remote, StatusCodes
+from ucapi import EntityTypes, StatusCodes
 from ucapi.media_player import Commands as MediaPlayerCommands
 from ucapi.media_player import States as MediaStates
 from ucapi.remote import Attributes, Features
 from ucapi.remote import States as RemoteStates
 from ucapi_framework import create_entity_id
+from ucapi_framework.entities import RemoteEntity
 
 _LOG = logging.getLogger(__name__)
 
@@ -34,7 +35,7 @@ PLEX_REMOTE_STATE_MAPPING = {
 }
 
 
-class PlexRemote(Remote):
+class PlexRemote(RemoteEntity):
     """Representation of a Plex Remote entity."""
 
     def __init__(self, config_device: PlexConfig, device: PlexServer):
@@ -55,6 +56,20 @@ class PlexRemote(Remote):
             cmd_handler=self.command_handler,
         )
 
+        # Subscribe to device push updates — sync_state() is called on every push_update()
+        self.subscribe_to_device(device)
+
+    async def sync_state(self) -> None:
+        """
+        Sync remote state from device.
+
+        Maps the shared MediaPlayer state from the device to a RemoteState and
+        pushes the change to the Remote. Called automatically on push_update() or reconnect.
+        """
+        device_state = self._device.get_state()
+        remote_state = PLEX_REMOTE_STATE_MAPPING.get(device_state, RemoteStates.UNKNOWN)
+        self.set_state(remote_state, update=True)
+
     def get_int_param(self, param: str, params: dict[str, Any] | None, default: int):
         """Get parameter in integer format."""
         if params is None:
@@ -66,7 +81,7 @@ class PlexRemote(Remote):
 
     async def command_handler(
         self,
-        _entity: Remote,
+        _entity: RemoteEntity,
         cmd_id: str,
         params: dict[str, Any] | None,
         _: Any | None = None,

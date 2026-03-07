@@ -27,7 +27,7 @@ async def main():
 
     driver = BaseIntegrationDriver(
         device_class=PlexServer,
-        entity_classes=[PlexMediaPlayer],
+        entity_classes=[PlexMediaPlayer],  # type: ignore[list-item]
         driver_id="plex_driver",
     )
 

@@ -29,7 +29,12 @@ class PlexSetupFlow(BaseSetupFlow[PlexConfig]):
 
     def __init__(self, config_manager, *, driver, discovery=None, device_class=None):
         """Initialize setup flow with state tracking."""
-        super().__init__(config_manager, discovery=discovery, driver=driver, device_class=device_class)
+        super().__init__(
+            config_manager,
+            discovery=discovery,
+            driver=driver,
+            device_class=device_class,
+        )
         self._available_clients = []  # Store client list across screens
 
     def get_manual_entry_form(self) -> RequestUserInput:
