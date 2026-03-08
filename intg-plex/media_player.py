@@ -7,6 +7,7 @@ Media-player entity functions.
 import logging
 from typing import Any
 
+import browser as plex_browser
 from const import PLEX_SIMPLE_COMMANDS, PlexConfig
 from plex import PlexServer
 from ucapi import StatusCodes, media_player
@@ -144,3 +145,21 @@ class PlexMediaPlayer(MediaPlayerEntity):
                 f"Client does not support the {cmd_id} command. Additional Info: %s", ex
             )
             return StatusCodes.OK
+
+    async def browse_media(self, params: dict, *, websocket=None):
+        """
+        Handle browse_media / search_media requests from the remote.
+
+        Delegates to the browser module which translates the browse hierarchy
+        into plexapi calls and returns BrowseMediaItem structures.
+        """
+        if self._device is None or self._device._plex is None:  # pylint: disable=protected-access
+            _LOG.warning("browse_media called but no Plex device is connected")
+            return StatusCodes.SERVICE_UNAVAILABLE
+
+        query = params.get("q")
+        if query is not None:
+            # search_media request
+            return await plex_browser.search(self._device, params)
+
+        return await plex_browser.browse(self._device, params)

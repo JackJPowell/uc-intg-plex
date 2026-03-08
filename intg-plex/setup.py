@@ -249,8 +249,27 @@ class PlexSetupFlow(BaseSetupFlow[PlexConfig]):
             {"id": "movie-art", "label": {"en": "Movie Background Art"}},
         ]
 
+        dropdown_page_size = [
+            {"id": "10",  "label": {"en": "10 items per page"}},
+            {"id": "20",  "label": {"en": "20 items per page"}},
+            {"id": "50",  "label": {"en": "50 items per page"}},
+            {"id": "100", "label": {"en": "100 items per page"}},
+        ]
+
+        dropdown_sort_order = [
+            {"id": "titleSort:asc",  "label": {"en": "Title (A → Z)"}},
+            {"id": "titleSort:desc", "label": {"en": "Title (Z → A)"}},
+            {"id": "year:desc",      "label": {"en": "Year (newest first)"}},
+            {"id": "addedAt:desc",   "label": {"en": "Date Added (newest first)"}},
+            {"id": "rating:desc",    "label": {"en": "Rating (highest first)"}},
+        ]
+
+        # Current values (if editing an existing device)
+        current_page_size = str(getattr(device_config, "page_size", 20) or 20)
+        current_sort_order = getattr(device_config, "sort_order", "titleSort:asc") or "titleSort:asc"
+
         return RequestUserInput(
-            {"en": "Artwork Selection"},
+            {"en": "Artwork & Browse Settings"},
             [
                 {
                     "id": "details",
@@ -280,6 +299,37 @@ class PlexSetupFlow(BaseSetupFlow[PlexConfig]):
                         "dropdown": {
                             "value": dropdown_movie_settings[0]["id"],
                             "items": dropdown_movie_settings,
+                        }
+                    },
+                },
+                {
+                    "id": "browse_settings",
+                    "label": {"en": "Media Browse Settings"},
+                    "field": {
+                        "label": {
+                            "value": {
+                                "en": "Configure pagination and sort order for media browsing.",
+                            }
+                        }
+                    },
+                },
+                {
+                    "id": "page_size",
+                    "label": {"en": "Items per Page"},
+                    "field": {
+                        "dropdown": {
+                            "value": current_page_size,
+                            "items": dropdown_page_size,
+                        }
+                    },
+                },
+                {
+                    "id": "sort_order",
+                    "label": {"en": "Sort Order"},
+                    "field": {
+                        "dropdown": {
+                            "value": current_sort_order,
+                            "items": dropdown_sort_order,
                         }
                     },
                 },
@@ -340,11 +390,13 @@ class PlexSetupFlow(BaseSetupFlow[PlexConfig]):
                 device, msg.input_values
             )  # ty:ignore[invalid-return-type]
 
-        # User completed artwork selection
+        # User completed artwork + browse settings selection
         tv_selection = msg.input_values.get("tv_selection", "tv-poster-series")
         movie_selection = msg.input_values.get("movie_selection", "movie-poster")
+        page_size = int(msg.input_values.get("page_size", 20))
+        sort_order = msg.input_values.get("sort_order", "titleSort:asc")
 
-        # Update the pending device with artwork selections
+        # Update the pending device with artwork + browse selections
         return PlexConfig(
             identifier=self._pending_device_config.identifier,
             name=self._pending_device_config.name,
@@ -356,6 +408,8 @@ class PlexSetupFlow(BaseSetupFlow[PlexConfig]):
             server_name=self._pending_device_config.server_name,
             tv_selection=tv_selection,
             movie_selection=movie_selection,
+            page_size=page_size,
+            sort_order=sort_order,
         )
 
     async def is_migration_required(self, previous_version: str) -> bool:
