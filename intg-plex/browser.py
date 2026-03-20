@@ -27,9 +27,20 @@ Browse hierarchy:
 """
 
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from plexapi.library import LibrarySection, MovieSection, ShowSection, MusicSection
+
+from ucapi.api_definitions import (
+    BrowseMediaItem,
+    BrowseOptions,
+    BrowseResults,
+    MediaClass,
+    MediaContentType,
+    Pagination,
+    SearchOptions,
+    SearchResults,
+)
 
 if TYPE_CHECKING:
     from plex import PlexServer
@@ -47,15 +58,11 @@ _SECTION_TYPE_MAP = {
 DEFAULT_PAGE_SIZE = 20
 
 
-def _pagination(items_returned: int, total: int | None, page: int, _limit: int) -> dict:
+def _pagination(
+    items_returned: int, total: int | None, page: int, _limit: int
+) -> Pagination:
     """Build the pagination block for a browse response."""
-    result: dict[str, Any] = {
-        "limit": items_returned,
-        "page": page,
-    }
-    if total is not None:
-        result["count"] = total
-    return result
+    return Pagination(limit=items_returned, page=page, count=total)
 
 
 def _thumb_url(server: "PlexServer", path: str | None) -> str | None:
@@ -69,6 +76,7 @@ def _make_item(
     media_id: str,
     title: str,
     *,
+    subtitle: str | None = None,
     media_class: str | None = None,
     media_type: str | None = None,
     can_browse: bool = False,
@@ -78,31 +86,24 @@ def _make_item(
     artist: str | None = None,
     album: str | None = None,
     duration: int | None = None,
-    children: list[dict] | None = None,
-) -> dict:
-    """Build a BrowseMediaItem dict."""
-    item: dict[str, Any] = {
-        "media_id": media_id,
-        "title": title,
-        "can_browse": can_browse,
-        "can_play": can_play,
-        "can_search": can_search,
-    }
-    if media_class:
-        item["media_class"] = media_class
-    if media_type:
-        item["media_type"] = media_type
-    if thumbnail:
-        item["thumbnail"] = thumbnail
-    if artist:
-        item["artist"] = artist
-    if album:
-        item["album"] = album
-    if duration is not None:
-        item["duration"] = duration
-    if children is not None:
-        item["items"] = children
-    return item
+    children: list[BrowseMediaItem] | None = None,
+) -> BrowseMediaItem:
+    """Build a BrowseMediaItem dataclass instance."""
+    return BrowseMediaItem(
+        media_id=media_id,
+        title=title,
+        subtitle=subtitle,
+        media_class=media_class or "",
+        media_type=media_type or "",
+        can_browse=can_browse,
+        can_play=can_play,
+        can_search=can_search,
+        thumbnail=thumbnail,
+        artist=artist,
+        album=album,
+        duration=duration,
+        items=children,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -110,21 +111,23 @@ def _make_item(
 # ---------------------------------------------------------------------------
 
 
-async def browse(server: "PlexServer", params: dict) -> dict:
+async def browse(server: "PlexServer", options: BrowseOptions) -> BrowseResults:
     """
     Handle a browse_media request.
 
     :param server: Connected PlexServer device instance
-    :param params: Request parameters from the remote (entity_id, media_id, media_type, paging)
-    :return: mediaBrowseResponse dict
+    :param options: Typed browse options from the remote
+    :return: BrowseResults dataclass
     """
-    media_id: str | None = params.get("media_id")
-    media_type: str | None = params.get("media_type")
-    paging: dict = params.get("paging") or {}
+    media_id: str | None = options.media_id
+    media_type: str | None = options.media_type
+    paging = options.paging
     limit: int = int(
-        paging.get("limit", server.device_config.page_size or DEFAULT_PAGE_SIZE)
+        (paging.limit if paging and paging.limit else None)
+        or server.device_config.page_size
+        or DEFAULT_PAGE_SIZE
     )
-    page: int = int(paging.get("page", 1))
+    page: int = int((paging.page if paging and paging.page else None) or 1)
 
     plex = server._plex  # pylint: disable=protected-access
     if plex is None:
@@ -147,29 +150,31 @@ async def browse(server: "PlexServer", params: dict) -> dict:
         return _empty_response()
 
 
-async def search(server: "PlexServer", params: dict) -> dict:
+async def search(server: "PlexServer", options: SearchOptions) -> SearchResults:
     """
     Handle a search_media request.
 
     :param server: Connected PlexServer device instance
-    :param params: Request parameters (entity_id, q, media_id, media_type, paging)
-    :return: mediaSearchResponse dict
+    :param options: Typed search options from the remote
+    :return: SearchResults dataclass
     """
-    query: str = params.get("q", "").strip()
-    media_id: str | None = params.get("media_id")
-    media_type: str | None = params.get("media_type")
-    paging: dict = params.get("paging") or {}
+    query: str = (options.query or "").strip()
+    media_id: str | None = options.media_id
+    media_type: str | None = options.media_type
+    paging = options.paging
     limit: int = int(
-        paging.get("limit", server.device_config.page_size or DEFAULT_PAGE_SIZE)
+        (paging.limit if paging and paging.limit else None)
+        or server.device_config.page_size
+        or DEFAULT_PAGE_SIZE
     )
-    page: int = int(paging.get("page", 1))
+    page: int = int((paging.page if paging and paging.page else None) or 1)
 
     if not query:
-        return {"media": [], "pagination": {"limit": 0, "page": 1, "count": 0}}
+        return SearchResults(media=[], pagination=Pagination(limit=0, page=1, count=0))
 
     plex = server._plex  # pylint: disable=protected-access
     if plex is None:
-        return {"media": [], "pagination": {"limit": 0, "page": 1, "count": 0}}
+        return SearchResults(media=[], pagination=Pagination(limit=0, page=1, count=0))
 
     try:
         return await server.event_loop.run_in_executor(
@@ -180,7 +185,7 @@ async def search(server: "PlexServer", params: dict) -> dict:
         )
     except Exception as ex:  # pylint: disable=broad-exception-caught
         _LOG.error("Error searching media (query=%s): %s", query, ex, exc_info=True)
-        return {"media": [], "pagination": {"limit": 0, "page": 1, "count": 0}}
+        return SearchResults(media=[], pagination=Pagination(limit=0, page=1, count=0))
 
 
 # ---------------------------------------------------------------------------
@@ -188,14 +193,16 @@ async def search(server: "PlexServer", params: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def _empty_response() -> dict:
-    return {
-        "media": _make_item("root", "Plex", media_class="directory", can_browse=True),
-        "pagination": {"limit": 0, "page": 1},
-    }
+def _empty_response() -> BrowseResults:
+    return BrowseResults(
+        media=_make_item(
+            "root", "Plex", media_class=MediaClass.DIRECTORY, can_browse=True
+        ),
+        pagination=Pagination(limit=0, page=1, count=None),
+    )
 
 
-def _browse_sync(server, plex, media_id, media_type, page, limit) -> dict:
+def _browse_sync(server, plex, media_id, media_type, page, limit) -> BrowseResults:
     """Synchronous browse logic (runs in thread pool)."""
 
     sort = server.device_config.sort_order or "titleSort:asc"
@@ -251,10 +258,10 @@ def _browse_sync(server, plex, media_id, media_type, page, limit) -> dict:
     return _browse_root(server, plex)
 
 
-def _browse_root(server, plex) -> dict:
+def _browse_root(server, plex) -> BrowseResults:
     """Return top-level library sections."""
     sections = plex.library.sections()
-    children: list[dict] = []
+    children: list[BrowseMediaItem] = []
     for section in sections:
         mt = _SECTION_TYPE_MAP.get(section.type)
         if mt is None:
@@ -263,7 +270,7 @@ def _browse_root(server, plex) -> dict:
             _make_item(
                 str(section.key),
                 section.title,
-                media_class="directory",
+                media_class=MediaClass.DIRECTORY,
                 media_type=mt,
                 can_browse=True,
                 can_search=True,
@@ -274,17 +281,17 @@ def _browse_root(server, plex) -> dict:
     root = _make_item(
         "root",
         "Plex",
-        media_class="directory",
+        media_class=MediaClass.DIRECTORY,
         can_browse=True,
         children=children,
     )
-    return {
-        "media": root,
-        "pagination": _pagination(len(children), len(children), 1, len(children) or 1),
-    }
+    return BrowseResults(
+        media=root,
+        pagination=_pagination(len(children), len(children), 1, len(children) or 1),
+    )
 
 
-def _browse_library(server, plex, section_key: str, media_type: str) -> dict:
+def _browse_library(server, plex, section_key: str, media_type: str) -> BrowseResults:
     """Return sub-categories for a library section (All Items / Recently Added)."""
     section = plex.library.sectionByID(int(section_key))
 
@@ -293,7 +300,7 @@ def _browse_library(server, plex, section_key: str, media_type: str) -> dict:
             section_key,
             "All Movies",
             media_type="movies",
-            media_class="movie",
+            media_class=MediaClass.MOVIE,
             can_browse=True,
             can_search=True,
         )
@@ -301,7 +308,7 @@ def _browse_library(server, plex, section_key: str, media_type: str) -> dict:
             section_key,
             "Recently Added",
             media_type="movies_recent",
-            media_class="movie",
+            media_class=MediaClass.MOVIE,
             can_browse=True,
         )
     elif media_type == "show_library":
@@ -309,7 +316,7 @@ def _browse_library(server, plex, section_key: str, media_type: str) -> dict:
             section_key,
             "All Shows",
             media_type="shows",
-            media_class="tv_show",
+            media_class=MediaClass.TV_SHOW,
             can_browse=True,
             can_search=True,
         )
@@ -317,7 +324,7 @@ def _browse_library(server, plex, section_key: str, media_type: str) -> dict:
             section_key,
             "Recently Added",
             media_type="shows_recent",
-            media_class="tv_show",
+            media_class=MediaClass.TV_SHOW,
             can_browse=True,
         )
     else:  # music_library
@@ -325,7 +332,7 @@ def _browse_library(server, plex, section_key: str, media_type: str) -> dict:
             section_key,
             "All Artists",
             media_type="artists",
-            media_class="artist",
+            media_class=MediaClass.ARTIST,
             can_browse=True,
             can_search=True,
         )
@@ -333,7 +340,7 @@ def _browse_library(server, plex, section_key: str, media_type: str) -> dict:
             section_key,
             "Recently Added",
             media_type="music_recent",
-            media_class="album",
+            media_class=MediaClass.ALBUM,
             can_browse=True,
         )
 
@@ -341,22 +348,22 @@ def _browse_library(server, plex, section_key: str, media_type: str) -> dict:
     parent = _make_item(
         section_key,
         section.title,
-        media_class="directory",
+        media_class=MediaClass.DIRECTORY,
         media_type=media_type,
         thumbnail=thumb,
         can_browse=True,
         can_search=True,
         children=[sub_all, sub_rec],
     )
-    return {
-        "media": parent,
-        "pagination": _pagination(2, 2, 1, 2),
-    }
+    return BrowseResults(
+        media=parent,
+        pagination=_pagination(2, 2, 1, 2),
+    )
 
 
 def _browse_movies(
     server, plex, section_key: str, sort: str, page: int, limit: int
-) -> dict:
+) -> BrowseResults:
     section: MovieSection = plex.library.sectionByID(int(section_key))
     start = (page - 1) * limit
     movies = section.search(
@@ -372,8 +379,9 @@ def _browse_movies(
         _make_item(
             str(m.ratingKey),
             m.title,
-            media_class="movie",
-            media_type="movie",
+            subtitle=str(m.year) if getattr(m, "year", None) else None,
+            media_class=MediaClass.MOVIE,
+            media_type=MediaContentType.MOVIE,
             can_play=True,
             thumbnail=_thumb_url(server, getattr(m, "thumb", None)),
             duration=int(getattr(m, "duration", 0) / 1000)
@@ -385,19 +393,19 @@ def _browse_movies(
     parent = _make_item(
         section_key,
         section.title,
-        media_class="directory",
+        media_class=MediaClass.DIRECTORY,
         can_browse=True,
         children=children,
     )
-    return {
-        "media": parent,
-        "pagination": _pagination(len(children), total, page, limit),
-    }
+    return BrowseResults(
+        media=parent,
+        pagination=_pagination(len(children), total, page, limit),
+    )
 
 
 def _browse_movies_recent(
     server, plex, section_key: str, page: int, limit: int
-) -> dict:
+) -> BrowseResults:
     section: MovieSection = plex.library.sectionByID(int(section_key))
     all_recent = section.recentlyAdded(maxresults=100, libtype="movie")
     start = (page - 1) * limit
@@ -407,8 +415,9 @@ def _browse_movies_recent(
         _make_item(
             str(m.ratingKey),
             m.title,
-            media_class="movie",
-            media_type="movie",
+            subtitle=str(m.year) if getattr(m, "year", None) else None,
+            media_class=MediaClass.MOVIE,
+            media_type=MediaContentType.MOVIE,
             can_play=True,
             thumbnail=_thumb_url(server, getattr(m, "thumb", None)),
             duration=int(getattr(m, "duration", 0) / 1000)
@@ -420,19 +429,19 @@ def _browse_movies_recent(
     parent = _make_item(
         section_key,
         "Recently Added",
-        media_class="directory",
+        media_class=MediaClass.DIRECTORY,
         can_browse=True,
         children=children,
     )
-    return {
-        "media": parent,
-        "pagination": _pagination(len(children), len(all_recent), page, limit),
-    }
+    return BrowseResults(
+        media=parent,
+        pagination=_pagination(len(children), len(all_recent), page, limit),
+    )
 
 
 def _browse_shows(
     server, plex, section_key: str, sort: str, page: int, limit: int
-) -> dict:
+) -> BrowseResults:
     section: ShowSection = plex.library.sectionByID(int(section_key))
     start = (page - 1) * limit
     shows = section.search(
@@ -448,7 +457,7 @@ def _browse_shows(
         _make_item(
             str(s.ratingKey),
             s.title,
-            media_class="tv_show",
+            media_class=MediaClass.TV_SHOW,
             media_type="show",
             can_browse=True,
             thumbnail=_thumb_url(server, getattr(s, "thumb", None)),
@@ -458,17 +467,19 @@ def _browse_shows(
     parent = _make_item(
         section_key,
         section.title,
-        media_class="directory",
+        media_class=MediaClass.DIRECTORY,
         can_browse=True,
         children=children,
     )
-    return {
-        "media": parent,
-        "pagination": _pagination(len(children), total, page, limit),
-    }
+    return BrowseResults(
+        media=parent,
+        pagination=_pagination(len(children), total, page, limit),
+    )
 
 
-def _browse_shows_recent(server, plex, section_key: str, page: int, limit: int) -> dict:
+def _browse_shows_recent(
+    server, plex, section_key: str, page: int, limit: int
+) -> BrowseResults:
     section: ShowSection = plex.library.sectionByID(int(section_key))
     all_recent = section.recentlyAdded(maxresults=100, libtype="episode")
     # Group by show to avoid duplicates
@@ -487,7 +498,7 @@ def _browse_shows_recent(server, plex, section_key: str, page: int, limit: int) 
         _make_item(
             str(getattr(ep, "grandparentRatingKey", ep.ratingKey)),
             getattr(ep, "grandparentTitle", ep.title),
-            media_class="tv_show",
+            media_class=MediaClass.TV_SHOW,
             media_type="show",
             can_browse=True,
             thumbnail=_thumb_url(server, getattr(ep, "grandparentThumb", None)),
@@ -497,17 +508,17 @@ def _browse_shows_recent(server, plex, section_key: str, page: int, limit: int) 
     parent = _make_item(
         section_key,
         "Recently Added",
-        media_class="directory",
+        media_class=MediaClass.DIRECTORY,
         can_browse=True,
         children=children,
     )
-    return {
-        "media": parent,
-        "pagination": _pagination(len(children), len(unique_shows), page, limit),
-    }
+    return BrowseResults(
+        media=parent,
+        pagination=_pagination(len(children), len(unique_shows), page, limit),
+    )
 
 
-def _browse_seasons(server, plex, show_rating_key: str) -> dict:
+def _browse_seasons(server, plex, show_rating_key: str) -> BrowseResults:
     show = plex.fetchItem(int(show_rating_key))
     seasons = show.seasons()
 
@@ -515,8 +526,8 @@ def _browse_seasons(server, plex, show_rating_key: str) -> dict:
         _make_item(
             str(s.ratingKey),
             s.title,
-            media_class="season",
-            media_type="season",
+            media_class=MediaClass.SEASON,
+            media_type=MediaContentType.SEASON,
             can_browse=True,
             thumbnail=_thumb_url(server, getattr(s, "thumb", None)),
         )
@@ -525,18 +536,18 @@ def _browse_seasons(server, plex, show_rating_key: str) -> dict:
     parent = _make_item(
         show_rating_key,
         show.title,
-        media_class="tv_show",
+        media_class=MediaClass.TV_SHOW,
         can_browse=True,
         thumbnail=_thumb_url(server, getattr(show, "thumb", None)),
         children=children,
     )
-    return {
-        "media": parent,
-        "pagination": _pagination(len(children), len(children), 1, len(children) or 1),
-    }
+    return BrowseResults(
+        media=parent,
+        pagination=_pagination(len(children), len(children), 1, len(children) or 1),
+    )
 
 
-def _browse_episodes(server, plex, season_rating_key: str) -> dict:
+def _browse_episodes(server, plex, season_rating_key: str) -> BrowseResults:
     season = plex.fetchItem(int(season_rating_key))
     episodes = season.episodes()
 
@@ -544,8 +555,9 @@ def _browse_episodes(server, plex, season_rating_key: str) -> dict:
         _make_item(
             str(ep.ratingKey),
             f"{ep.index}. {ep.title}" if ep.index else ep.title,
-            media_class="episode",
-            media_type="episode",
+            subtitle=getattr(ep, "grandparentTitle", None),
+            media_class=MediaClass.EPISODE,
+            media_type=MediaContentType.EPISODE,
             can_play=True,
             thumbnail=_thumb_url(server, getattr(ep, "thumb", None)),
             duration=int(getattr(ep, "duration", 0) / 1000)
@@ -557,20 +569,20 @@ def _browse_episodes(server, plex, season_rating_key: str) -> dict:
     parent = _make_item(
         season_rating_key,
         season.title,
-        media_class="season",
+        media_class=MediaClass.SEASON,
         can_browse=True,
         thumbnail=_thumb_url(server, getattr(season, "thumb", None)),
         children=children,
     )
-    return {
-        "media": parent,
-        "pagination": _pagination(len(children), len(children), 1, len(children) or 1),
-    }
+    return BrowseResults(
+        media=parent,
+        pagination=_pagination(len(children), len(children), 1, len(children) or 1),
+    )
 
 
 def _browse_artists(
     server, plex, section_key: str, sort: str, page: int, limit: int
-) -> dict:
+) -> BrowseResults:
     section: MusicSection = plex.library.sectionByID(int(section_key))
     start = (page - 1) * limit
     artists = section.search(
@@ -586,8 +598,8 @@ def _browse_artists(
         _make_item(
             str(a.ratingKey),
             a.title,
-            media_class="artist",
-            media_type="artist",
+            media_class=MediaClass.ARTIST,
+            media_type=MediaContentType.ARTIST,
             can_browse=True,
             thumbnail=_thumb_url(server, getattr(a, "thumb", None)),
         )
@@ -596,17 +608,19 @@ def _browse_artists(
     parent = _make_item(
         section_key,
         section.title,
-        media_class="directory",
+        media_class=MediaClass.DIRECTORY,
         can_browse=True,
         children=children,
     )
-    return {
-        "media": parent,
-        "pagination": _pagination(len(children), total, page, limit),
-    }
+    return BrowseResults(
+        media=parent,
+        pagination=_pagination(len(children), total, page, limit),
+    )
 
 
-def _browse_music_recent(server, plex, section_key: str, page: int, limit: int) -> dict:
+def _browse_music_recent(
+    server, plex, section_key: str, page: int, limit: int
+) -> BrowseResults:
     section: MusicSection = plex.library.sectionByID(int(section_key))
     all_recent = section.recentlyAdded(maxresults=100, libtype="album")
     start = (page - 1) * limit
@@ -616,8 +630,8 @@ def _browse_music_recent(server, plex, section_key: str, page: int, limit: int) 
         _make_item(
             str(a.ratingKey),
             a.title,
-            media_class="album",
-            media_type="album",
+            media_class=MediaClass.ALBUM,
+            media_type=MediaContentType.ALBUM,
             artist=getattr(a, "parentTitle", None),
             can_browse=True,
             thumbnail=_thumb_url(server, getattr(a, "thumb", None)),
@@ -627,17 +641,17 @@ def _browse_music_recent(server, plex, section_key: str, page: int, limit: int) 
     parent = _make_item(
         section_key,
         "Recently Added",
-        media_class="directory",
+        media_class=MediaClass.DIRECTORY,
         can_browse=True,
         children=children,
     )
-    return {
-        "media": parent,
-        "pagination": _pagination(len(children), len(all_recent), page, limit),
-    }
+    return BrowseResults(
+        media=parent,
+        pagination=_pagination(len(children), len(all_recent), page, limit),
+    )
 
 
-def _browse_albums(server, plex, artist_rating_key: str) -> dict:
+def _browse_albums(server, plex, artist_rating_key: str) -> BrowseResults:
     artist = plex.fetchItem(int(artist_rating_key))
     albums = artist.albums()
 
@@ -645,8 +659,8 @@ def _browse_albums(server, plex, artist_rating_key: str) -> dict:
         _make_item(
             str(a.ratingKey),
             a.title,
-            media_class="album",
-            media_type="album",
+            media_class=MediaClass.ALBUM,
+            media_type=MediaContentType.ALBUM,
             can_browse=True,
             thumbnail=_thumb_url(server, getattr(a, "thumb", None)),
         )
@@ -655,18 +669,18 @@ def _browse_albums(server, plex, artist_rating_key: str) -> dict:
     parent = _make_item(
         artist_rating_key,
         artist.title,
-        media_class="artist",
+        media_class=MediaClass.ARTIST,
         can_browse=True,
         thumbnail=_thumb_url(server, getattr(artist, "thumb", None)),
         children=children,
     )
-    return {
-        "media": parent,
-        "pagination": _pagination(len(children), len(children), 1, len(children) or 1),
-    }
+    return BrowseResults(
+        media=parent,
+        pagination=_pagination(len(children), len(children), 1, len(children) or 1),
+    )
 
 
-def _browse_tracks(server, plex, album_rating_key: str) -> dict:
+def _browse_tracks(server, plex, album_rating_key: str) -> BrowseResults:
     album = plex.fetchItem(int(album_rating_key))
     tracks = album.tracks()
 
@@ -674,8 +688,9 @@ def _browse_tracks(server, plex, album_rating_key: str) -> dict:
         _make_item(
             str(t.ratingKey),
             f"{t.index}. {t.title}" if t.index else t.title,
-            media_class="track",
-            media_type="track",
+            subtitle=getattr(t, "parentTitle", None),
+            media_class=MediaClass.TRACK,
+            media_type=MediaContentType.TRACK,
             can_play=True,
             artist=getattr(t, "grandparentTitle", None),
             album=getattr(t, "parentTitle", None),
@@ -691,15 +706,15 @@ def _browse_tracks(server, plex, album_rating_key: str) -> dict:
     parent = _make_item(
         album_rating_key,
         album.title,
-        media_class="album",
+        media_class=MediaClass.ALBUM,
         can_browse=True,
         thumbnail=_thumb_url(server, getattr(album, "thumb", None)),
         children=children,
     )
-    return {
-        "media": parent,
-        "pagination": _pagination(len(children), len(children), 1, len(children) or 1),
-    }
+    return BrowseResults(
+        media=parent,
+        pagination=_pagination(len(children), len(children), 1, len(children) or 1),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -715,9 +730,9 @@ def _search_sync(
     _media_type: str | None,
     page: int,
     limit: int,
-) -> dict:
+) -> SearchResults:
     """Synchronous search logic (runs in thread pool)."""
-    results: list[dict] = []
+    results: list[BrowseMediaItem] = []
 
     # If media_id points to a specific section, scope the search there
     if media_id and media_id != "root":
@@ -732,10 +747,12 @@ def _search_sync(
     for item in raw:
         media_class, item_media_type, can_play, can_browse = _classify_item(item)
         thumb = _thumb_url(server, getattr(item, "thumb", None))
+        subtitle = _search_subtitle(item, item_media_type)
         results.append(
             _make_item(
                 str(item.ratingKey),
                 item.title,
+                subtitle=subtitle,
                 media_class=media_class,
                 media_type=item_media_type,
                 can_play=can_play,
@@ -756,10 +773,10 @@ def _search_sync(
     start = (page - 1) * limit
     page_results = results[start : start + limit]
 
-    return {
-        "media": page_results,
-        "pagination": _pagination(len(page_results), total, page, limit),
-    }
+    return SearchResults(
+        media=page_results,
+        pagination=_pagination(len(page_results), total, page, limit),
+    )
 
 
 def _classify_item(item) -> tuple[str, str, bool, bool]:
@@ -782,3 +799,20 @@ def _classify_item(item) -> tuple[str, str, bool, bool]:
             return "track", "track", True, False
         case _:
             return "directory", t or "directory", False, True
+
+
+def _search_subtitle(item, media_type: str) -> str | None:
+    """Return a contextual subtitle string for a search result item."""
+    match media_type:
+        case "movie":
+            year = getattr(item, "year", None)
+            return str(year) if year else None
+        case "episode":
+            return getattr(item, "grandparentTitle", None)
+        case "track":
+            return getattr(item, "parentTitle", None)
+        case "album":
+            year = getattr(item, "year", None)
+            return str(year) if year else None
+        case _:
+            return None

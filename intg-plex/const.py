@@ -64,6 +64,7 @@ PLEX_FEATURES = [
     Features.SEEK,
     Features.BROWSE_MEDIA,
     Features.SEARCH_MEDIA,
+    Features.PLAY_MEDIA_ACTION,
 ]
 
 
