@@ -7,9 +7,11 @@ Media-player entity functions.
 import logging
 from typing import Any
 
+import browser as plex_browser
 from const import PLEX_SIMPLE_COMMANDS, PlexConfig
 from plex import PlexServer
 from ucapi import StatusCodes, media_player
+from ucapi.api_definitions import BrowseOptions, BrowseResults, SearchOptions, SearchResults
 from ucapi.media_player import Commands, DeviceClasses, Options
 from ucapi_framework import create_entity_id
 from ucapi_framework.entities import MediaPlayerEntity
@@ -84,6 +86,12 @@ class PlexMediaPlayer(MediaPlayerEntity):
         if self._device is None:
             _LOG.warning("No Plex instance for entity: %s", self.id)
             return StatusCodes.SERVICE_UNAVAILABLE
+
+        # play_media can be invoked when nothing is currently playing, so resolve
+        # the client before the session guard below.
+        if cmd_id == Commands.PLAY_MEDIA:
+            return await self._handle_play_media(params)
+
         client = self._device.client
 
         if client is None:
@@ -144,3 +152,76 @@ class PlexMediaPlayer(MediaPlayerEntity):
                 f"Client does not support the {cmd_id} command. Additional Info: %s", ex
             )
             return StatusCodes.OK
+
+    async def _handle_play_media(self, params: dict | None) -> StatusCodes:
+        """Fetch the requested media item from Plex and start playback on the client."""
+        if not params or not (media_id := params.get("media_id")):
+            _LOG.warning("play_media called without media_id")
+            return StatusCodes.BAD_REQUEST
+
+        plex = self._device._plex  # pylint: disable=protected-access
+        if plex is None:
+            _LOG.warning("play_media called but no Plex server is connected")
+            return StatusCodes.SERVICE_UNAVAILABLE
+
+        try:
+            # Resolve a playback client — prefer the active session client, fall back
+            # to looking up the device by machineIdentifier in the server's client list.
+            client = self._device.client
+            if client is None:
+                identifier = self._device.identifier
+                available = await self._device.event_loop.run_in_executor(
+                    None, plex.clients
+                )
+                client = next(
+                    (c for c in available if c.machineIdentifier == identifier), None
+                )
+                if client:
+                    client.proxyThroughServer(True, plex)
+
+            if client is None:
+                _LOG.warning(
+                    "play_media: no reachable Plex client for %s",
+                    self._device.identifier,
+                )
+                return StatusCodes.SERVICE_UNAVAILABLE
+
+            item = await self._device.event_loop.run_in_executor(
+                None, plex.fetchItem, int(media_id)
+            )
+            await self._device.event_loop.run_in_executor(None, client.playMedia, item)
+            _LOG.info(
+                "play_media: started playback of '%s' (id=%s)",
+                getattr(item, "title", media_id),
+                media_id,
+            )
+            return StatusCodes.OK
+        except Exception as ex:  # pylint: disable=broad-exception-caught
+            _LOG.error("play_media failed for media_id=%s: %s", media_id, ex)
+            return StatusCodes.SERVER_ERROR
+
+    async def browse(self, options: BrowseOptions) -> BrowseResults | StatusCodes:
+        """
+        Handle a browse_media request from the remote.
+
+        Delegates to the browser module which translates the browse hierarchy
+        into plexapi calls and returns BrowseResults.
+        """
+        if self._device is None or self._device._plex is None:  # pylint: disable=protected-access
+            _LOG.warning("browse called but no Plex device is connected")
+            return StatusCodes.SERVICE_UNAVAILABLE
+
+        return await plex_browser.browse(self._device, options)
+
+    async def search(self, options: SearchOptions) -> SearchResults | StatusCodes:
+        """
+        Handle a search_media request from the remote.
+
+        Delegates to the browser module which runs a Plex library search
+        and returns SearchResults.
+        """
+        if self._device is None or self._device._plex is None:  # pylint: disable=protected-access
+            _LOG.warning("search called but no Plex device is connected")
+            return StatusCodes.SERVICE_UNAVAILABLE
+
+        return await plex_browser.search(self._device, options)

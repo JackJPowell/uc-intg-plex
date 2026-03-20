@@ -20,6 +20,8 @@ class PlexConfig:
     port: str
     tv_selection: str
     movie_selection: str
+    page_size: int = 20
+    sort_order: str = "titleSort:asc"
 
 
 PLEX_MEDIA_TYPES = {
@@ -60,6 +62,9 @@ PLEX_FEATURES = [
     Features.GUIDE,
     Features.INFO,
     Features.SEEK,
+    Features.BROWSE_MEDIA,
+    Features.SEARCH_MEDIA,
+    Features.PLAY_MEDIA_ACTION,
 ]
 
 
