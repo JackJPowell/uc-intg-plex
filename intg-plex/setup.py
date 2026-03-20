@@ -135,10 +135,10 @@ class PlexSetupFlow(BaseSetupFlow[PlexConfig]):
             )
 
             if not auth_token:
-                address = server._baseurl
+                address = server._baseurl  # type: ignore[invalid-argument-type]
 
             # Store server config for later use
-            self._pending_device_config = {  # ty:ignore[invalid-assignment]
+            self._pending_device_config = {  # type: ignore[invalid-assignment]
                 "address": address,
                 "port": port,
                 "username": username,
@@ -150,7 +150,7 @@ class PlexSetupFlow(BaseSetupFlow[PlexConfig]):
             # Get list of active clients
             self._available_clients = []
 
-            for session in server.sessions():
+            for session in server.sessions():  # type: ignore[union-attr]
                 for player in session.players:
                     if (
                         player.machineIdentifier
@@ -250,23 +250,25 @@ class PlexSetupFlow(BaseSetupFlow[PlexConfig]):
         ]
 
         dropdown_page_size = [
-            {"id": "10",  "label": {"en": "10 items per page"}},
-            {"id": "20",  "label": {"en": "20 items per page"}},
-            {"id": "50",  "label": {"en": "50 items per page"}},
+            {"id": "10", "label": {"en": "10 items per page"}},
+            {"id": "20", "label": {"en": "20 items per page"}},
+            {"id": "50", "label": {"en": "50 items per page"}},
             {"id": "100", "label": {"en": "100 items per page"}},
         ]
 
         dropdown_sort_order = [
-            {"id": "titleSort:asc",  "label": {"en": "Title (A → Z)"}},
+            {"id": "titleSort:asc", "label": {"en": "Title (A → Z)"}},
             {"id": "titleSort:desc", "label": {"en": "Title (Z → A)"}},
-            {"id": "year:desc",      "label": {"en": "Year (newest first)"}},
-            {"id": "addedAt:desc",   "label": {"en": "Date Added (newest first)"}},
-            {"id": "rating:desc",    "label": {"en": "Rating (highest first)"}},
+            {"id": "year:desc", "label": {"en": "Year (newest first)"}},
+            {"id": "addedAt:desc", "label": {"en": "Date Added (newest first)"}},
+            {"id": "rating:desc", "label": {"en": "Rating (highest first)"}},
         ]
 
         # Current values (if editing an existing device)
         current_page_size = str(getattr(device_config, "page_size", 20) or 20)
-        current_sort_order = getattr(device_config, "sort_order", "titleSort:asc") or "titleSort:asc"
+        current_sort_order = (
+            getattr(device_config, "sort_order", "titleSort:asc") or "titleSort:asc"
+        )
 
         return RequestUserInput(
             {"en": "Artwork & Browse Settings"},
@@ -398,14 +400,14 @@ class PlexSetupFlow(BaseSetupFlow[PlexConfig]):
 
         # Update the pending device with artwork + browse selections
         return PlexConfig(
-            identifier=self._pending_device_config.identifier,
-            name=self._pending_device_config.name,
-            address=self._pending_device_config.address,
-            port=self._pending_device_config.port,
-            username=self._pending_device_config.username,
-            password=self._pending_device_config.password,
-            auth_token=self._pending_device_config.auth_token,
-            server_name=self._pending_device_config.server_name,
+            identifier=self._pending_device_config.identifier,  # type: ignore[invalid-return-type]
+            name=self._pending_device_config.name,  # type: ignore[invalid-return-type]
+            address=self._pending_device_config.address,  # type: ignore[invalid-return-type]
+            port=self._pending_device_config.port,  # type: ignore[invalid-return-type]
+            username=self._pending_device_config.username,  # type: ignore[invalid-return-type]
+            password=self._pending_device_config.password,  # type: ignore[invalid-return-type]
+            auth_token=self._pending_device_config.auth_token,  # type: ignore[invalid-return-type]
+            server_name=self._pending_device_config.server_name,  # type: ignore[invalid-return-type]
             tv_selection=tv_selection,
             movie_selection=movie_selection,
             page_size=page_size,
