@@ -5,6 +5,7 @@ Implements the UC Remote Two media browsing / searching API against a Plex serve
 
 Browse hierarchy:
   ROOT
+  ├─ On Deck                          (media_type="on_deck")
   └─ Libraries                        (media_type="library_root")
      ├─ Movies                         (media_type="movie_library", media_id=<section_key>)
      │   ├─ All Movies                 (media_type="movies",         media_id=<section_key>)
@@ -70,6 +71,25 @@ def _thumb_url(server: "PlexServer", path: str | None) -> str | None:
     if not path:
         return None
     return server.build_plex_url(path)
+
+
+def _episode_thumb(server: "PlexServer", item) -> str | None:
+    """Return the correct thumbnail for an episode, respecting tv_selection config."""
+    selection = getattr(server.device_config, "tv_selection", "tv-poster-series")
+    match selection:
+        case "tv-poster-series":
+            path = getattr(item, "grandparentThumb", None)
+        case "tv-poster-season":
+            path = getattr(item, "parentThumb", None)
+        case "tv-poster-episode":
+            path = getattr(item, "thumb", None)
+        case "tv-poster-art":
+            # artUrl is a full URL already
+            art = getattr(item, "artUrl", None)
+            return art or _thumb_url(server, getattr(item, "grandparentThumb", None))
+        case _:
+            path = getattr(item, "grandparentThumb", None)
+    return _thumb_url(server, path)
 
 
 def _make_item(
@@ -211,6 +231,10 @@ def _browse_sync(server, plex, media_id, media_type, page, limit) -> BrowseResul
     if not media_id or media_type in (None, "root", "library_root"):
         return _browse_root(server, plex)
 
+    # ── On Deck ─────────────────────────────────────────────────────────────
+    if media_type == "on_deck":
+        return _browse_on_deck(server, plex, page, limit)
+
     # ── Library-level views ─────────────────────────────────────────────────
     if media_type in ("movie_library", "show_library", "music_library"):
         return _browse_library(server, plex, media_id, media_type)
@@ -258,10 +282,78 @@ def _browse_sync(server, plex, media_id, media_type, page, limit) -> BrowseResul
     return _browse_root(server, plex)
 
 
+def _browse_on_deck(server, plex, page: int, limit: int) -> BrowseResults:
+    """Return all On Deck items (in-progress content) across all libraries."""
+    all_items = plex.continueWatching()
+    start = (page - 1) * limit
+    items = all_items[start : start + limit]
+
+    children = []
+    for item in items:
+        item_type = getattr(item, "type", "")
+        if item_type == "episode":
+            show_title = getattr(item, "grandparentTitle", None)
+            season_num = getattr(item, "parentIndex", None)
+            ep_num = getattr(item, "index", None)
+            subtitle = f"S{season_num:02d}E{ep_num:02d}" if season_num and ep_num else None
+            children.append(_make_item(
+                str(item.ratingKey),
+                item.title,
+                subtitle=subtitle,
+                artist=show_title,
+                media_class=MediaClass.EPISODE,
+                media_type=MediaContentType.EPISODE,
+                can_play=True,
+                thumbnail=_episode_thumb(server, item),
+                duration=int(item.duration / 1000) if getattr(item, "duration", None) else None,
+            ))
+        elif item_type == "movie":
+            children.append(_make_item(
+                str(item.ratingKey),
+                item.title,
+                subtitle=str(item.year) if getattr(item, "year", None) else None,
+                media_class=MediaClass.MOVIE,
+                media_type=MediaContentType.MOVIE,
+                can_play=True,
+                thumbnail=_thumb_url(server, getattr(item, "thumb", None)),
+                duration=int(item.duration / 1000) if getattr(item, "duration", None) else None,
+            ))
+        else:
+            children.append(_make_item(
+                str(item.ratingKey),
+                item.title,
+                media_class=MediaClass.DIRECTORY,
+                media_type=item_type,
+                can_play=True,
+                thumbnail=_thumb_url(server, getattr(item, "thumb", None)),
+            ))
+
+    parent = _make_item(
+        "on_deck",
+        "On Deck",
+        media_class=MediaClass.DIRECTORY,
+        media_type="on_deck",
+        can_browse=True,
+        children=children,
+    )
+    return BrowseResults(
+        media=parent,
+        pagination=_pagination(len(children), len(all_items), page, limit),
+    )
+
+
 def _browse_root(server, plex) -> BrowseResults:
     """Return top-level library sections."""
     sections = plex.library.sections()
-    children: list[BrowseMediaItem] = []
+    children: list[BrowseMediaItem] = [
+        _make_item(
+            "on_deck",
+            "On Deck",
+            media_class=MediaClass.DIRECTORY,
+            media_type="on_deck",
+            can_browse=True,
+        )
+    ]
     for section in sections:
         mt = _SECTION_TYPE_MAP.get(section.type)
         if mt is None:
@@ -285,9 +377,10 @@ def _browse_root(server, plex) -> BrowseResults:
         can_browse=True,
         children=children,
     )
+    total = len(children)
     return BrowseResults(
         media=root,
-        pagination=_pagination(len(children), len(children), 1, len(children) or 1),
+        pagination=_pagination(total, total, 1, total or 1),
     )
 
 
@@ -559,7 +652,7 @@ def _browse_episodes(server, plex, season_rating_key: str) -> BrowseResults:
             media_class=MediaClass.EPISODE,
             media_type=MediaContentType.EPISODE,
             can_play=True,
-            thumbnail=_thumb_url(server, getattr(ep, "thumb", None)),
+            thumbnail=_episode_thumb(server, ep),
             duration=int(getattr(ep, "duration", 0) / 1000)
             if getattr(ep, "duration", None)
             else None,
