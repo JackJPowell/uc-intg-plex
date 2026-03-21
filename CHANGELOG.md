@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v1.2.2 - 2026-03-21
+
+### Changed
+- Applied a temporary workaround that results in the browse media icon displaying properly. Will be addressed properly with next firmware release.
+
+---
+
 ## v1.2.1 - 2026-03-20
 
 ### Added

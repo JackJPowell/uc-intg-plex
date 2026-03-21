@@ -50,7 +50,7 @@ class PlexMediaPlayer(MediaPlayerEntity):
                 media_player.Attributes.MEDIA_ARTIST: "",
                 media_player.Attributes.MEDIA_ALBUM: "",
             },
-            device_class=DeviceClasses.STREAMING_BOX,
+            device_class=DeviceClasses.SPEAKER,
             options=options,
             cmd_handler=self.command_handler,
         )
