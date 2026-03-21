@@ -55,6 +55,7 @@ PLEX_FEATURES = [
     Features.MEDIA_DURATION,
     Features.MEDIA_POSITION,
     Features.MEDIA_ARTIST,
+    Features.MEDIA_ALBUM,
     Features.DPAD,
     Features.HOME,
     Features.MENU,
@@ -62,9 +63,13 @@ PLEX_FEATURES = [
     Features.GUIDE,
     Features.INFO,
     Features.SEEK,
+    Features.REPEAT,
+    Features.SHUFFLE,
+    Features.PLAY_MEDIA,
     Features.BROWSE_MEDIA,
     Features.SEARCH_MEDIA,
     Features.PLAY_MEDIA_ACTION,
+    Features.CLEAR_PLAYLIST,
 ]
 
 

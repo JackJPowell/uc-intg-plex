@@ -156,6 +156,7 @@ class PlexSetupFlow(BaseSetupFlow[PlexConfig]):
                         player.machineIdentifier
                         not in [d.identifier for d in self.config.all()]
                         and player.local is True
+                        and "plex web" not in (player.product or "").lower()
                     ):
                         self._available_clients.append(
                             {

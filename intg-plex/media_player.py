@@ -8,10 +8,15 @@ import logging
 from typing import Any
 
 import browser as plex_browser
-from const import PLEX_SIMPLE_COMMANDS, PlexConfig
+from const import PLEX_FEATURES, PLEX_SIMPLE_COMMANDS, PlexConfig
 from plex import PlexServer
 from ucapi import StatusCodes, media_player
-from ucapi.api_definitions import BrowseOptions, BrowseResults, SearchOptions, SearchResults
+from ucapi.api_definitions import (
+    BrowseOptions,
+    BrowseResults,
+    SearchOptions,
+    SearchResults,
+)
 from ucapi.media_player import Commands, DeviceClasses, Options
 from ucapi_framework import create_entity_id
 from ucapi_framework.entities import MediaPlayerEntity
@@ -30,13 +35,11 @@ class PlexMediaPlayer(MediaPlayerEntity):
         entity_id = create_entity_id(
             media_player.EntityTypes.MEDIA_PLAYER, config_device.identifier
         )
-        features = device.supported_features
-
         options = {Options.SIMPLE_COMMANDS: list(PLEX_SIMPLE_COMMANDS.keys())}
         super().__init__(
             entity_id,
             config_device.name,
-            features,
+            PLEX_FEATURES,
             {
                 media_player.Attributes.STATE: media_player.States.UNKNOWN,
                 media_player.Attributes.VOLUME: 0,
@@ -47,7 +50,7 @@ class PlexMediaPlayer(MediaPlayerEntity):
                 media_player.Attributes.MEDIA_ARTIST: "",
                 media_player.Attributes.MEDIA_ALBUM: "",
             },
-            device_class=DeviceClasses.TV,
+            device_class=DeviceClasses.STREAMING_BOX,
             options=options,
             cmd_handler=self.command_handler,
         )
@@ -165,31 +168,56 @@ class PlexMediaPlayer(MediaPlayerEntity):
             return StatusCodes.SERVICE_UNAVAILABLE
 
         try:
-            # Resolve a playback client — prefer the active session client, fall back
-            # to looking up the device by machineIdentifier in the server's client list.
-            client = self._device.client
+            identifier = self._device.identifier
+
+            # Always prefer a direct client from plex.clients() — these have a
+            # local baseurl (e.g. http://192.168.1.x:32500) and do not proxy
+            # commands through the server, avoiding the 404 that occurs when the
+            # server tries to forward to the client on its behalf.
+            available = await self._device.event_loop.run_in_executor(
+                None, plex.clients
+            )
+            client = next(
+                (c for c in available if c.machineIdentifier == identifier), None
+            )
+
+            # Fall back to the session player (server-proxied) if the client is
+            # not advertising itself via GDM (e.g. app in background).
             if client is None:
-                identifier = self._device.identifier
-                available = await self._device.event_loop.run_in_executor(
-                    None, plex.clients
-                )
-                client = next(
-                    (c for c in available if c.machineIdentifier == identifier), None
-                )
-                if client:
-                    client.proxyThroughServer(True, plex)
+                client = self._device.client
 
             if client is None:
                 _LOG.warning(
-                    "play_media: no reachable Plex client for %s",
+                    "play_media: no reachable Plex client for %s — is the app open?",
                     self._device.identifier,
                 )
                 return StatusCodes.SERVICE_UNAVAILABLE
 
+            # Plex Web runs in a browser and does not support the HTTP player
+            # control API — remote play commands will always 404.
+            product = getattr(client, "product", "") or ""
+            if "plex web" in product.lower():
+                _LOG.warning(
+                    "play_media: client '%s' is Plex Web which does not support remote playback commands",
+                    product,
+                )
+                return StatusCodes.NOT_IMPLEMENTED
+
+            _LOG.debug(
+                "play_media: using client '%s' baseurl=%s",
+                product or identifier,
+                getattr(client, "_baseurl", "proxied"),
+            )
+
             item = await self._device.event_loop.run_in_executor(
                 None, plex.fetchItem, int(media_id)
             )
-            await self._device.event_loop.run_in_executor(None, client.playMedia, item)
+
+            def _play():
+                queue = plex.createPlayQueue(item)
+                client.playMedia(item, offset=0, playQueue=queue)
+
+            await self._device.event_loop.run_in_executor(None, _play)
             _LOG.info(
                 "play_media: started playback of '%s' (id=%s)",
                 getattr(item, "title", media_id),

@@ -13,7 +13,7 @@ from io import BytesIO
 from typing import Any
 
 import aiohttp
-from const import PLEX_FEATURES, PlexConfig
+from const import PlexConfig
 from PIL import Image
 from plexapi.base import MediaContainer
 from plexapi.myplex import MyPlexAccount
@@ -22,7 +22,6 @@ from plexapi.server import PlexServer as PlexApiServer
 from plexwebsocket import STATE_CONNECTED, PlexWebsocket
 from ucapi.media_player import (
     Attributes as MediaPlayerAttrs,
-    Features,
     MediaType,
 )
 from ucapi.media_player import States as MediaStates
@@ -561,11 +560,6 @@ class PlexServer(ExternalClientDevice):
     def state(self) -> MediaStates:
         """Return the cached state of the device."""
         return self.get_state()
-
-    @property
-    def supported_features(self) -> list[Features]:
-        """Return supported features."""
-        return PLEX_FEATURES
 
     @property
     def is_volume_muted(self) -> bool:
