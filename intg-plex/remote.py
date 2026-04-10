@@ -122,7 +122,7 @@ class PlexRemote(RemoteEntity):
 
         try:
             if command == MediaPlayerCommands.VOLUME:
-                client.setVolume(params.get("volume"))
+                client.setVolume(params.get("volume", 0))
             elif command == MediaPlayerCommands.PLAY_PAUSE:
                 if self._device.play_state == "playing":
                     client.pause()

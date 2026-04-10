@@ -20,10 +20,7 @@ from plexapi.myplex import MyPlexAccount
 from plexapi.server import PlexClient
 from plexapi.server import PlexServer as PlexApiServer
 from plexwebsocket import STATE_CONNECTED, PlexWebsocket
-from ucapi.media_player import (
-    Attributes as MediaPlayerAttrs,
-    MediaType,
-)
+from ucapi.media_player import Attributes as MediaPlayerAttrs, MediaContentType
 from ucapi.media_player import States as MediaStates
 from ucapi_framework import (
     ExternalClientDevice,
@@ -310,11 +307,11 @@ class PlexServer(ExternalClientDevice):
             self._session = session
 
             if session.TYPE == "audio":
-                media_type = MediaType.MUSIC
+                media_type = MediaContentType.MUSIC
             elif session.TYPE == "episode":
-                media_type = MediaType.TVSHOW
+                media_type = MediaContentType.TV_SHOW
             elif session.TYPE == "video":
-                media_type = MediaType.VIDEO
+                media_type = MediaContentType.VIDEO
             else:
                 media_type = ""
 

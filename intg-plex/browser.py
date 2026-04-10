@@ -32,7 +32,7 @@ from typing import TYPE_CHECKING
 
 from plexapi.library import LibrarySection, MovieSection, ShowSection, MusicSection
 
-from ucapi.api_definitions import (
+from ucapi import (
     BrowseMediaItem,
     BrowseOptions,
     BrowseResults,
@@ -295,38 +295,50 @@ def _browse_on_deck(server, plex, page: int, limit: int) -> BrowseResults:
             show_title = getattr(item, "grandparentTitle", None)
             season_num = getattr(item, "parentIndex", None)
             ep_num = getattr(item, "index", None)
-            subtitle = f"S{season_num:02d}E{ep_num:02d}" if season_num and ep_num else None
-            children.append(_make_item(
-                str(item.ratingKey),
-                item.title,
-                subtitle=subtitle,
-                artist=show_title,
-                media_class=MediaClass.EPISODE,
-                media_type=MediaContentType.EPISODE,
-                can_play=True,
-                thumbnail=_episode_thumb(server, item),
-                duration=int(item.duration / 1000) if getattr(item, "duration", None) else None,
-            ))
+            subtitle = (
+                f"S{season_num:02d}E{ep_num:02d}" if season_num and ep_num else None
+            )
+            children.append(
+                _make_item(
+                    str(item.ratingKey),
+                    item.title,
+                    subtitle=subtitle,
+                    artist=show_title,
+                    media_class=MediaClass.EPISODE,
+                    media_type=MediaContentType.EPISODE,
+                    can_play=True,
+                    thumbnail=_episode_thumb(server, item),
+                    duration=int(item.duration / 1000)
+                    if getattr(item, "duration", None)
+                    else None,
+                )
+            )
         elif item_type == "movie":
-            children.append(_make_item(
-                str(item.ratingKey),
-                item.title,
-                subtitle=str(item.year) if getattr(item, "year", None) else None,
-                media_class=MediaClass.MOVIE,
-                media_type=MediaContentType.MOVIE,
-                can_play=True,
-                thumbnail=_thumb_url(server, getattr(item, "thumb", None)),
-                duration=int(item.duration / 1000) if getattr(item, "duration", None) else None,
-            ))
+            children.append(
+                _make_item(
+                    str(item.ratingKey),
+                    item.title,
+                    subtitle=str(item.year) if getattr(item, "year", None) else None,
+                    media_class=MediaClass.MOVIE,
+                    media_type=MediaContentType.MOVIE,
+                    can_play=True,
+                    thumbnail=_thumb_url(server, getattr(item, "thumb", None)),
+                    duration=int(item.duration / 1000)
+                    if getattr(item, "duration", None)
+                    else None,
+                )
+            )
         else:
-            children.append(_make_item(
-                str(item.ratingKey),
-                item.title,
-                media_class=MediaClass.DIRECTORY,
-                media_type=item_type,
-                can_play=True,
-                thumbnail=_thumb_url(server, getattr(item, "thumb", None)),
-            ))
+            children.append(
+                _make_item(
+                    str(item.ratingKey),
+                    item.title,
+                    media_class=MediaClass.DIRECTORY,
+                    media_type=item_type,
+                    can_play=True,
+                    thumbnail=_thumb_url(server, getattr(item, "thumb", None)),
+                )
+            )
 
     parent = _make_item(
         "on_deck",

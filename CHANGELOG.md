@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## v1.2.3 - 2026-04-10
+
+### Changed
+- Updated ucapi to 0.6.0, ucapi-framework to 1.9.1, and plexapi to 4.18.1.
+
+---
+
 ## v1.2.2 - 2026-03-21
 
 ### Changed

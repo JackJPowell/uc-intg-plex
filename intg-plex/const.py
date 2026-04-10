@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 
-from ucapi.media_player import Commands, Features, MediaType
+from ucapi.media_player import Commands, Features, MediaContentType
 from ucapi.ui import Buttons, DeviceButtonMapping, UiPage
 
 
@@ -25,19 +25,19 @@ class PlexConfig:
 
 
 PLEX_MEDIA_TYPES = {
-    "music": MediaType.MUSIC,
-    "artist": MediaType.MUSIC,
-    "album": MediaType.MUSIC,
-    "song": MediaType.MUSIC,
-    "video": MediaType.VIDEO,
-    "set": MediaType.MUSIC,
-    "musicvideo": MediaType.VIDEO,
-    "movie": MediaType.MOVIE,
-    "tvshow": MediaType.TVSHOW,
-    "season": MediaType.TVSHOW,
-    "episode": MediaType.TVSHOW,
-    "channel": MediaType.TVSHOW,
-    "audio": MediaType.MUSIC,
+    "music": MediaContentType.MUSIC,
+    "artist": MediaContentType.MUSIC,
+    "album": MediaContentType.MUSIC,
+    "song": MediaContentType.MUSIC,
+    "video": MediaContentType.VIDEO,
+    "set": MediaContentType.MUSIC,
+    "musicvideo": MediaContentType.VIDEO,
+    "movie": MediaContentType.MOVIE,
+    "tvshow": MediaContentType.TV_SHOW,
+    "season": MediaContentType.TV_SHOW,
+    "episode": MediaContentType.TV_SHOW,
+    "channel": MediaContentType.TV_SHOW,
+    "audio": MediaContentType.MUSIC,
 }
 
 PLEX_FEATURES = [
