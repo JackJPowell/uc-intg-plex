@@ -5,6 +5,12 @@ name: "Build & Release"
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release (e.g. 0.2.0, without v prefix)"
+        required: true
+        type: string
 
 env:
   INTG_NAME: plex
