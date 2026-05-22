@@ -91,7 +91,7 @@ PLEX_REMOTE_BUTTONS_MAPPING: list[DeviceButtonMapping] = [  # type: ignore[assig
     {"button": Buttons.PREV, "short_press": {"cmd_id": Commands.PREVIOUS}},
     {"button": Buttons.NEXT, "short_press": {"cmd_id": Commands.NEXT}},
     {"button": Buttons.MUTE, "short_press": {"cmd_id": Commands.MUTE}},
-]
+]  # ty:ignore[invalid-assignment]
 
 PLEX_REMOTE_SIMPLE_COMMANDS = [
     Commands.MUTE,
@@ -150,7 +150,7 @@ PLEX_REMOTE_UI_PAGES: list[UiPage] = [  # type: ignore[assignment]
             },
         ],
     },
-]
+]  # ty:ignore[invalid-assignment]
 
 
 def key_update_helper(input_attributes, key: str, value: str | None, attributes):

@@ -135,10 +135,10 @@ class PlexSetupFlow(BaseSetupFlow[PlexConfig]):
             )
 
             if not auth_token:
-                address = server._baseurl  # type: ignore[invalid-argument-type]
+                address = server._baseurl  # ty:ignore[unresolved-attribute]
 
             # Store server config for later use
-            self._pending_device_config = {  # type: ignore[invalid-assignment]
+            self._pending_device_config = {  # ty:ignore[invalid-assignment]
                 "address": address,
                 "port": port,
                 "username": username,
@@ -150,7 +150,7 @@ class PlexSetupFlow(BaseSetupFlow[PlexConfig]):
             # Get list of active clients
             self._available_clients = []
 
-            for session in server.sessions():  # type: ignore[union-attr]
+            for session in server.sessions():  # ty:ignore[unresolved-attribute]
                 for player in session.players:
                     if (
                         player.machineIdentifier
@@ -401,14 +401,14 @@ class PlexSetupFlow(BaseSetupFlow[PlexConfig]):
 
         # Update the pending device with artwork + browse selections
         return PlexConfig(
-            identifier=self._pending_device_config.identifier,  # type: ignore[invalid-return-type]
-            name=self._pending_device_config.name,  # type: ignore[invalid-return-type]
-            address=self._pending_device_config.address,  # type: ignore[invalid-return-type]
-            port=self._pending_device_config.port,  # type: ignore[invalid-return-type]
-            username=self._pending_device_config.username,  # type: ignore[invalid-return-type]
-            password=self._pending_device_config.password,  # type: ignore[invalid-return-type]
-            auth_token=self._pending_device_config.auth_token,  # type: ignore[invalid-return-type]
-            server_name=self._pending_device_config.server_name,  # type: ignore[invalid-return-type]
+            identifier=self._pending_device_config.identifier,  # ty:ignore[unresolved-attribute]
+            name=self._pending_device_config.name,  # ty:ignore[unresolved-attribute]
+            address=self._pending_device_config.address,  # ty:ignore[unresolved-attribute]
+            port=self._pending_device_config.port,  # ty:ignore[unresolved-attribute]
+            username=self._pending_device_config.username,  # ty:ignore[unresolved-attribute]
+            password=self._pending_device_config.password,  # ty:ignore[unresolved-attribute]
+            auth_token=self._pending_device_config.auth_token,  # ty:ignore[unresolved-attribute]
+            server_name=self._pending_device_config.server_name,  # ty:ignore[unresolved-attribute]
             tv_selection=tv_selection,
             movie_selection=movie_selection,
             page_size=page_size,
