@@ -17,7 +17,10 @@ from ucapi_framework import BaseConfigManager, BaseIntegrationDriver, get_config
 
 async def main():
     """Start the Remote integration driver."""
-    logging.basicConfig()
+    logging.basicConfig(
+        format="%(asctime)s.%(msecs)03d %(levelname)-8s %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
 
     level = os.getenv("UC_LOG_LEVEL", "DEBUG").upper()
     logging.getLogger("driver").setLevel(level)
