@@ -97,3 +97,27 @@ def artist_album_labels(item) -> tuple[str, str]:
             return season_episode_label(item), ""
         case _:
             return "", ""
+
+
+def pick_session(sessions: list, payload: dict | None = None):
+    """
+    Choose the session to show from those on this player.
+
+    Matches the websocket notification's sessionKey, then its ratingKey; without a match
+    (or a notification) a session whose player is playing wins over a stale one, and
+    the first session is the last resort.
+    """
+    if not sessions:
+        return None
+    if payload:
+        for field in ("sessionKey", "ratingKey"):
+            wanted = payload.get(field)
+            if wanted in (None, ""):
+                continue
+            for session in sessions:
+                if str(getattr(session, field, "")) == str(wanted):
+                    return session
+    for session in sessions:
+        if any(getattr(p, "state", None) == "playing" for p in getattr(session, "players", [])):
+            return session
+    return sessions[0]

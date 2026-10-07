@@ -14,7 +14,13 @@ from io import BytesIO
 from typing import Any
 
 import aiohttp
-from now_playing import artist_album_labels, episode_artwork_path, media_content_type, movie_artwork_path
+from now_playing import (
+    artist_album_labels,
+    episode_artwork_path,
+    media_content_type,
+    movie_artwork_path,
+    pick_session,
+)
 from const import PlexConfig
 from PIL import Image
 from plexapi.base import MediaContainer
@@ -70,6 +76,8 @@ class PlexServer(ExternalClientDevice):
         self._session: MediaContainer | None = None
         self._image_cache = None
         self._image_cache_url = None
+        # sessionKey of the session the remote is showing; see _follows_session()
+        self._active_session_key: str | None = None
         self._background_tasks: set[asyncio.Task] = set()
         self._listen_task: asyncio.Task | None = None
         self._connect_lock = asyncio.Lock()
@@ -418,6 +426,9 @@ class PlexServer(ExternalClientDevice):
                                 payload = item
                                 break
 
+                        if payload and not self._follows_session(payload):
+                            payload = None
+
                         if payload:
                             # Update state immediately from websocket data
                             play_state = payload["state"]
@@ -465,6 +476,33 @@ class PlexServer(ExternalClientDevice):
         if error:
             _LOG.warning("[%s] WebSocket error: %s", self.identifier, error)
 
+    def _follows_session(self, payload: dict) -> bool:
+        """
+        Decide whether a websocket notification is about the session the remote shows.
+
+        Plex can keep a previous session listed on the same player (e.g. the song before
+        a TV show) and may still send a late paused/stopped notification for it. Acting
+        on that would flip the remote back to the old item or switch it off while the
+        new one plays. So a different session is only adopted when it starts playing or
+        buffering, or when nothing is active; its pause/stop notifications are ignored.
+        """
+        key = str(payload.get("sessionKey") or "")
+        state = payload.get("state")
+        if not key or key == self._active_session_key or self._active_session_key is None:
+            self._active_session_key = None if state == "stopped" else (key or self._active_session_key)
+            return True
+        if state in ("playing", "buffering"):
+            self._active_session_key = key
+            return True
+        _LOG.debug(
+            "[%s] Ignoring %s for session %s (showing session %s)",
+            self.identifier,
+            state,
+            key,
+            self._active_session_key,
+        )
+        return False
+
     async def _fetch_session_details(self, payload: dict, identifier: str):
         """Fetch full session details without blocking the event loop."""
         t0 = time.perf_counter()
@@ -472,7 +510,7 @@ class PlexServer(ExternalClientDevice):
         try:
             # Run blocking Plex HTTP call in a thread pool executor
             session = await self.event_loop.run_in_executor(
-                None, self.get_session_by_client_id, self.device_config.identifier
+                None, self.get_session_by_client_id, self.device_config.identifier, payload
             )
 
             if not session:
@@ -646,8 +684,15 @@ class PlexServer(ExternalClientDevice):
                     self._players.append(player)
         return self._players
 
-    def get_session_by_client_id(self, identifier) -> MediaContainer | None:
-        """Get session by client identifier."""
+    def get_session_by_client_id(self, identifier, payload: dict | None = None) -> MediaContainer | None:
+        """
+        Get the session playing on this client.
+
+        Plex can list more than one session for the same player for a while (e.g. the
+        previous song after switching to a TV show), so taking the first match can show
+        the old item. When the websocket notification is supplied, its sessionKey (then
+        ratingKey) picks the right one; otherwise a playing session is preferred.
+        """
         if not self._plex:
             return None
         t0 = time.perf_counter()
@@ -660,10 +705,12 @@ class PlexServer(ExternalClientDevice):
                 len(sessions),
                 elapsed,
             )
-            for session in sessions:
-                for player in session.players:
-                    if player.machineIdentifier == identifier and player.local is True:
-                        return session
+            matches = [
+                session
+                for session in sessions
+                if any(p.machineIdentifier == identifier and p.local is True for p in session.players)
+            ]
+            return pick_session(matches, payload)
         except Exception as ex:  # pylint: disable=broad-exception-caught
             _LOG.error(
                 "[%s] Failed to fetch sessions after %.2fs: %s",
