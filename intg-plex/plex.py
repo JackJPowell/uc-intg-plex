@@ -20,7 +20,9 @@ from now_playing import (
     media_content_type,
     movie_artwork_path,
     pick_session,
+    placeholder_image,
 )
+from placeholders import PLACEHOLDER_IDLE
 from const import PlexConfig
 from PIL import Image
 from plexapi.base import MediaContainer
@@ -42,6 +44,9 @@ _STATE_STOPPED = "stopped"  # plexwebsocket STATE_STOPPED constant
 DEFAULT_TIMEOUT = 8.0
 WEBSOCKET_WATCHDOG_INTERVAL = 10
 CONNECTION_RETRIES = 10
+# A playlist moving to its next item reports "stopped" and starts the next one within a
+# second or so; waiting this long before showing the idle image avoids a flash between items.
+IDLE_DELAY_SECONDS = 3.0
 
 
 class PlexServer(ExternalClientDevice):
@@ -341,12 +346,34 @@ class PlexServer(ExternalClientDevice):
             self._attributes[MediaPlayerAttrs.MEDIA_ARTIST] = artist
             self._attributes[MediaPlayerAttrs.MEDIA_ALBUM] = album
 
-            url = self._get_artwork_url(self._session)
+            url = self._get_artwork_url(self._session) or placeholder_image(self._session)
             self._attributes[MediaPlayerAttrs.MEDIA_IMAGE_URL] = url
         else:
             _LOG.info("[%s] No active session (%.2fs)", self.identifier, elapsed)
             self._attributes[MediaPlayerAttrs.STATE] = MediaStates.OFF
+            self._set_idle_media()
         self.push_update()
+
+    def _set_idle_media(self) -> None:
+        """Show the "Nothing playing on Plex" placeholder and clear the previous item's details."""
+        self._attributes.update(
+            {
+                MediaPlayerAttrs.MEDIA_IMAGE_URL: PLACEHOLDER_IDLE,
+                MediaPlayerAttrs.MEDIA_TITLE: "",
+                MediaPlayerAttrs.MEDIA_ARTIST: "",
+                MediaPlayerAttrs.MEDIA_ALBUM: "",
+                MediaPlayerAttrs.MEDIA_TYPE: "",
+                MediaPlayerAttrs.MEDIA_DURATION: 0,
+                MediaPlayerAttrs.MEDIA_POSITION: 0,
+            }
+        )
+
+    async def _show_idle_after_delay(self) -> None:
+        """Switch to the idle placeholder if nothing has started playing after a short wait."""
+        await asyncio.sleep(IDLE_DELAY_SECONDS)
+        if self._attributes.get(MediaPlayerAttrs.STATE) == MediaStates.OFF:
+            self._set_idle_media()
+            self.push_update()
 
     def _get_plex_server(self) -> PlexApiServer | None:
         """Get a reference to the PMS (stateless HTTP connection)."""
@@ -446,6 +473,7 @@ class PlexServer(ExternalClientDevice):
                                     MediaStates.OFF
                                 )
                                 self.push_update()
+                                self._create_task(self._show_idle_after_delay())
                             elif play_state == "paused":
                                 media_position = payload["viewOffset"] / 1000
                                 self._attributes[MediaPlayerAttrs.STATE] = (
@@ -551,7 +579,7 @@ class PlexServer(ExternalClientDevice):
             self._attributes[MediaPlayerAttrs.MEDIA_ALBUM] = album
 
             # Get artwork URL
-            url = self._get_artwork_url(session)
+            url = self._get_artwork_url(session) or placeholder_image(session)
             self._attributes[MediaPlayerAttrs.MEDIA_IMAGE_URL] = url
 
             # Notify entities that state changed
@@ -577,14 +605,10 @@ class PlexServer(ExternalClientDevice):
             if session.type == "movie":
                 path = movie_artwork_path(session, self._device_config.movie_selection)
                 return self.build_plex_url(path) if path else ""
-            else:
-                match self._device_config.movie_selection:
-                    case "movie-poster":
-                        return session.posterUrl
-                    case "movie-art":
-                        return session.artUrl
-                    case _:
-                        return session.posterUrl
+            # Anything else (music, clips) keeps plexapi's poster/art URLs
+            if self._device_config.movie_selection == "movie-art":
+                return session.artUrl
+            return session.posterUrl
         except (AttributeError, KeyError) as ex:
             _LOG.debug("Error getting artwork URL, using fallback: %s", ex)
             # Fallback to default artwork
@@ -827,6 +851,16 @@ class PlexServer(ExternalClientDevice):
 
         Entities call this inside ``sync_state()`` to pull fresh state from the device.
 
+        Whenever nothing is playing (OFF) and no artwork is set, the idle placeholder is
+        filled in here. Every update to the remote passes through this method, so this
+        covers every path to that state (stop, startup, a reconnect that resets the
+        attributes) rather than relying on each one to set it. Not while UNKNOWN: the
+        remote doesn't show artwork then, and since only changed attributes are sent, an
+        image sent during UNKNOWN wouldn't be re-sent when the state then becomes OFF.
+
         :return: Shallow copy of the current attributes dict.
         """
-        return dict(self._attributes)
+        attrs = dict(self._attributes)
+        if attrs.get(MediaPlayerAttrs.STATE) == MediaStates.OFF and not attrs.get(MediaPlayerAttrs.MEDIA_IMAGE_URL):
+            attrs[MediaPlayerAttrs.MEDIA_IMAGE_URL] = PLACEHOLDER_IDLE
+        return attrs

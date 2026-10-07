@@ -14,6 +14,8 @@ always be blank on live channels.
 
 from ucapi.media_player import MediaContentType
 
+from placeholders import PLACEHOLDER_MOVIE, PLACEHOLDER_MUSIC, PLACEHOLDER_TV
+
 # Plex metadata attributes to try, in order, for each artwork setting.
 TV_ARTWORK_ORDER = {
     "tv-poster-series": ("grandparentThumb", "parentThumb", "thumb", "grandparentArt", "art"),
@@ -121,3 +123,13 @@ def pick_session(sessions: list, payload: dict | None = None):
         if any(getattr(p, "state", None) == "playing" for p in getattr(session, "players", [])):
             return session
     return sessions[0]
+
+
+def placeholder_image(item) -> str:
+    """Return the placeholder artwork (a data URI) for the item's media type, or ""."""
+    return {
+        "episode": PLACEHOLDER_TV,
+        "movie": PLACEHOLDER_MOVIE,
+        "clip": PLACEHOLDER_MOVIE,
+        "track": PLACEHOLDER_MUSIC,
+    }.get(getattr(item, "type", None), "")
