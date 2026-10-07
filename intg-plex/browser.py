@@ -43,7 +43,7 @@ from ucapi import (
     SearchResults,
 )
 
-from artwork import episode_artwork_path
+from now_playing import episode_artwork_path
 
 if TYPE_CHECKING:
     from plex import PlexServer

@@ -14,7 +14,7 @@ from io import BytesIO
 from typing import Any
 
 import aiohttp
-from artwork import episode_artwork_path, movie_artwork_path
+from now_playing import artist_album_labels, episode_artwork_path, media_content_type, movie_artwork_path
 from const import PlexConfig
 from PIL import Image
 from plexapi.base import MediaContainer
@@ -23,7 +23,7 @@ from plexapi.server import PlexClient
 from plexapi.server import PlexServer as PlexApiServer
 from plexwebsocket import SIGNAL_CONNECTION_STATE, STATE_CONNECTED, PlexWebsocket
 
-from ucapi.media_player import Attributes as MediaPlayerAttrs, MediaContentType
+from ucapi.media_player import Attributes as MediaPlayerAttrs
 from ucapi.media_player import States as MediaStates
 from ucapi_framework import (
     ExternalClientDevice,
@@ -318,14 +318,7 @@ class PlexServer(ExternalClientDevice):
                 self._attributes[MediaPlayerAttrs.STATE] = MediaStates.ON
 
             # Populate all media attributes so the remote sees correct info immediately
-            if self._session.TYPE == "audio":
-                media_type = MediaContentType.MUSIC
-            elif self._session.TYPE == "episode":
-                media_type = MediaContentType.TV_SHOW
-            elif self._session.TYPE == "video":
-                media_type = MediaContentType.VIDEO
-            else:
-                media_type = ""
+            media_type = media_content_type(self._session)
 
             duration = getattr(self._session, "duration", 0)
             self._attributes[MediaPlayerAttrs.MEDIA_DURATION] = int(
@@ -336,12 +329,9 @@ class PlexServer(ExternalClientDevice):
                 self._session, "title", ""
             )
 
-            if hasattr(self._session, "type") and self._session.type == "episode":
-                season_episode = getattr(self._session, "seasonEpisode", "")
-                if season_episode and isinstance(season_episode, str):
-                    self._attributes[MediaPlayerAttrs.MEDIA_ARTIST] = (
-                        season_episode.upper()
-                    )
+            artist, album = artist_album_labels(self._session)
+            self._attributes[MediaPlayerAttrs.MEDIA_ARTIST] = artist
+            self._attributes[MediaPlayerAttrs.MEDIA_ALBUM] = album
 
             url = self._get_artwork_url(self._session)
             self._attributes[MediaPlayerAttrs.MEDIA_IMAGE_URL] = url
@@ -502,14 +492,7 @@ class PlexServer(ExternalClientDevice):
 
             self._session = session
 
-            if session.TYPE == "audio":
-                media_type = MediaContentType.MUSIC
-            elif session.TYPE == "episode":
-                media_type = MediaContentType.TV_SHOW
-            elif session.TYPE == "video":
-                media_type = MediaContentType.VIDEO
-            else:
-                media_type = ""
+            media_type = media_content_type(session)
 
             # Build updated data with safe attribute access
             duration = getattr(session, "duration", 0)
@@ -523,12 +506,11 @@ class PlexServer(ExternalClientDevice):
             self._attributes[MediaPlayerAttrs.MEDIA_TYPE] = media_type
             self._attributes[MediaPlayerAttrs.MEDIA_TITLE] = title
 
-            if hasattr(session, "type") and session.type == "episode":
-                season_episode = getattr(session, "seasonEpisode", "")
-                if season_episode and isinstance(season_episode, str):
-                    self._attributes[MediaPlayerAttrs.MEDIA_ARTIST] = (
-                        season_episode.upper()
-                    )
+            # Always (re)set, so switching to something without these (a movie, or a live TV
+            # programme without episode numbers) clears the previous item's labels.
+            artist, album = artist_album_labels(session)
+            self._attributes[MediaPlayerAttrs.MEDIA_ARTIST] = artist
+            self._attributes[MediaPlayerAttrs.MEDIA_ALBUM] = album
 
             # Get artwork URL
             url = self._get_artwork_url(session)
