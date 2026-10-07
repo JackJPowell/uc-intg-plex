@@ -43,6 +43,8 @@ from ucapi import (
     SearchResults,
 )
 
+from artwork import episode_artwork_path
+
 if TYPE_CHECKING:
     from plex import PlexServer
 
@@ -75,21 +77,8 @@ def _thumb_url(server: "PlexServer", path: str | None) -> str | None:
 
 def _episode_thumb(server: "PlexServer", item) -> str | None:
     """Return the correct thumbnail for an episode, respecting tv_selection config."""
-    selection = getattr(server.device_config, "tv_selection", "tv-poster-series")
-    match selection:
-        case "tv-poster-series":
-            path = getattr(item, "grandparentThumb", None)
-        case "tv-poster-season":
-            path = getattr(item, "parentThumb", None)
-        case "tv-poster-episode":
-            path = getattr(item, "thumb", None)
-        case "tv-poster-art":
-            # artUrl is a full URL already
-            art = getattr(item, "artUrl", None)
-            return art or _thumb_url(server, getattr(item, "grandparentThumb", None))
-        case _:
-            path = getattr(item, "grandparentThumb", None)
-    return _thumb_url(server, path)
+    selection = getattr(server.device_config, "tv_selection", None)
+    return _thumb_url(server, episode_artwork_path(item, selection))
 
 
 def _make_item(

@@ -14,6 +14,7 @@ from io import BytesIO
 from typing import Any
 
 import aiohttp
+from artwork import episode_artwork_path, movie_artwork_path
 from const import PlexConfig
 from PIL import Image
 from plexapi.base import MediaContainer
@@ -548,20 +549,14 @@ class PlexServer(ExternalClientDevice):
             )
 
     def _get_artwork_url(self, session) -> str:
-        """Get artwork URL based on configuration."""
+        """Get artwork URL based on configuration, falling back to the next best image."""
         try:
             if session.type == "episode":
-                match self._device_config.tv_selection:
-                    case "tv-poster-series":
-                        return self.build_plex_url(session.grandparentThumb)
-                    case "tv-poster-season":
-                        return self.build_plex_url(session.parentThumb)
-                    case "tv-poster-episode":
-                        return self.build_plex_url(session.thumb)
-                    case "tv-poster-art":
-                        return session.artUrl
-                    case _:
-                        return self.build_plex_url(session.grandparentThumb)
+                path = episode_artwork_path(session, self._device_config.tv_selection)
+                return self.build_plex_url(path) if path else ""
+            if session.type == "movie":
+                path = movie_artwork_path(session, self._device_config.movie_selection)
+                return self.build_plex_url(path) if path else ""
             else:
                 match self._device_config.movie_selection:
                     case "movie-poster":
@@ -648,6 +643,10 @@ class PlexServer(ExternalClientDevice):
         if not path:
             _LOG.warning("Empty path provided to build_plex_url")
             return ""
+        # Some metadata (e.g. Live TV guide artwork) is an absolute URL on another host;
+        # use it as-is rather than prefixing the server address or sending it the token.
+        if path.startswith(("http://", "https://")):
+            return path
 
         config = self._device_config
         # Ensure address has http:// scheme
