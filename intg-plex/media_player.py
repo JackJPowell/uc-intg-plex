@@ -110,10 +110,7 @@ class PlexMediaPlayer(MediaPlayerEntity):
                     self.set_muted(False)
                     self.set_volume(volume, update=True)
             elif cmd_id == Commands.PLAY_PAUSE or cmd_id == Commands.CURSOR_ENTER:
-                if self._device.play_state == "playing":
-                    client.pause()
-                elif self._device.play_state == "paused":
-                    client.play()
+                await self._device.async_toggle_play_pause()
             elif cmd_id == Commands.MUTE:
                 client.setVolume(0)
                 self.set_muted(True, update=True)

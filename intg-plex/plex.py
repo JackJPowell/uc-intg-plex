@@ -40,6 +40,8 @@ _STATE_STOPPED = "stopped"  # plexwebsocket STATE_STOPPED constant
 DEFAULT_TIMEOUT = 8.0
 WEBSOCKET_WATCHDOG_INTERVAL = 10
 CONNECTION_RETRIES = 10
+# How long play/pause waits for the player to report its current state before using the cached one.
+PLAYER_STATE_TIMEOUT = 1.5
 # A playlist moving to its next item reports "stopped" and starts the next one within a
 # second or so; waiting this long before showing the idle image avoids a flash between items.
 IDLE_DELAY_SECONDS = 3.0
@@ -328,10 +330,11 @@ class PlexServer(ExternalClientDevice):
             if players:
                 play_state = getattr(players[0], "state", "playing")
 
-            if play_state == "paused":
-                self._attributes[MediaPlayerAttrs.STATE] = MediaStates.PAUSED
-            else:
-                self._attributes[MediaPlayerAttrs.STATE] = MediaStates.ON
+            # PLAYING (not ON) so play/pause knows to pause on the first press after a connect.
+            self._attributes[MediaPlayerAttrs.STATE] = {
+                "paused": MediaStates.PAUSED,
+                "buffering": MediaStates.BUFFERING,
+            }.get(play_state, MediaStates.PLAYING)
 
             # Populate all media attributes so the remote sees correct info immediately
             media_type = media_content_type(self._session)
@@ -807,6 +810,34 @@ class PlexServer(ExternalClientDevice):
         elif state == MediaStates.OFF:
             return "stopped"
         return None
+
+    async def async_toggle_play_pause(self) -> None:
+        """
+        Pause if the player is playing, otherwise play.
+
+        The cached state can lag the player (a connect, buffering, or a change made with the
+        TV's own remote), and acting on a stale state needed a second press. So the player's
+        own timeline is asked first, with a short timeout, falling back to the cached state.
+        Unknown states play. The media type from the timeline is passed along too: plexapi
+        defaults play()/pause() to "video", which some players ignore during music.
+        """
+        client = self.client
+        if client is None:
+            return
+        timeline = None
+        try:
+            timeline = await asyncio.wait_for(
+                self.event_loop.run_in_executor(None, lambda: client.timeline), timeout=PLAYER_STATE_TIMEOUT
+            )
+        except Exception as ex:  # pylint: disable=broad-exception-caught
+            _LOG.debug("[%s] Player timeline unavailable, using cached state: %s", self.identifier, ex)
+        state = getattr(timeline, "state", None) or self.play_state
+        mtype = getattr(timeline, "type", None)
+        if mtype not in ("video", "music", "photo"):
+            mtype = "music" if getattr(self._session, "type", None) == "track" else "video"
+        action = client.pause if state in ("playing", "buffering") else client.play
+        _LOG.debug("[%s] Play/pause: player state %s -> %s (%s)", self.identifier, state, action.__name__, mtype)
+        await self.event_loop.run_in_executor(None, lambda: action(mtype))
 
     @property
     def device_config(self) -> PlexConfig:
