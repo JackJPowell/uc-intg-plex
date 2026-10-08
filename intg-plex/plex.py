@@ -8,6 +8,7 @@ import asyncio
 import logging
 import time
 from asyncio import AbstractEventLoop
+from datetime import UTC, datetime
 from typing import Any
 
 from const import PlexConfig
@@ -364,8 +365,19 @@ class PlexServer(ExternalClientDevice):
             self._set_idle_media()
         self.push_update()
 
+    def _set_media_position(self, seconds: float) -> None:
+        """
+        Record the playback position and when it was read.
+
+        With media_position_updated_at the remote advances the progress bar itself between
+        Plex's updates instead of jumping each time one arrives.
+        """
+        self._attributes[MediaPlayerAttrs.MEDIA_POSITION] = int(seconds)
+        self._attributes[MediaPlayerAttrs.MEDIA_POSITION_UPDATED_AT] = datetime.now(tz=UTC).isoformat()
+
     def _set_idle_media(self) -> None:
         """Show the "Nothing playing on Plex" placeholder and clear the previous item's details."""
+        self._attributes.pop(MediaPlayerAttrs.MEDIA_POSITION_UPDATED_AT, None)
         self._attributes.update(
             {
                 MediaPlayerAttrs.MEDIA_IMAGE_URL: (
@@ -510,9 +522,7 @@ class PlexServer(ExternalClientDevice):
                                 self._attributes[MediaPlayerAttrs.STATE] = (
                                     MediaStates.PAUSED
                                 )
-                                self._attributes[MediaPlayerAttrs.MEDIA_POSITION] = int(
-                                    media_position
-                                )
+                                self._set_media_position(media_position)
                                 self._create_task(
                                     self._fetch_session_details(
                                         payload, self.identifier, revision
@@ -523,9 +533,7 @@ class PlexServer(ExternalClientDevice):
                                 self._attributes[MediaPlayerAttrs.STATE] = (
                                     MediaStates.PLAYING
                                 )
-                                self._attributes[MediaPlayerAttrs.MEDIA_POSITION] = int(
-                                    media_position
-                                )
+                                self._set_media_position(media_position)
                                 self._create_task(
                                     self._fetch_session_details(
                                         payload, self.identifier, revision
@@ -892,6 +900,10 @@ class PlexServer(ExternalClientDevice):
         :return: Shallow copy of the current attributes dict.
         """
         attrs = dict(self._attributes)
+        # Without a duration (Live TV reports position 0 on every update) a timestamp would make
+        # the remote count up from 0 and snap back with each update, so it's only sent with one.
+        if not attrs.get(MediaPlayerAttrs.MEDIA_DURATION):
+            attrs.pop(MediaPlayerAttrs.MEDIA_POSITION_UPDATED_AT, None)
         if (
             attrs.get(MediaPlayerAttrs.STATE) == MediaStates.OFF
             and not attrs.get(MediaPlayerAttrs.MEDIA_IMAGE_URL)
