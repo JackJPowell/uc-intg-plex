@@ -355,10 +355,10 @@ class PlexServer(ExternalClientDevice):
 
             url = self.get_artwork_url(self._session)
             self._attributes[MediaPlayerAttrs.MEDIA_IMAGE_URL] = url
+            # With a fresh timestamp, so a reconnect (e.g. the remote waking from standby)
+            # doesn't leave the previous position's old timestamp in place.
             position = getattr(self._session, "viewOffset", 0)
-            self._attributes[MediaPlayerAttrs.MEDIA_POSITION] = int(
-                position / 1000 if isinstance(position, (int, float)) else 0
-            )
+            self._set_media_position(position / 1000 if isinstance(position, (int, float)) else 0)
         else:
             _LOG.info("[%s] No active session (%.2fs)", self.identifier, elapsed)
             self._attributes[MediaPlayerAttrs.STATE] = MediaStates.OFF
