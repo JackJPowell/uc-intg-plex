@@ -30,8 +30,7 @@ Browse hierarchy:
 import logging
 from typing import TYPE_CHECKING
 
-from plexapi.library import LibrarySection, MovieSection, ShowSection, MusicSection
-
+from plexapi.library import LibrarySection, MovieSection, MusicSection, ShowSection
 from ucapi import (
     BrowseMediaItem,
     BrowseOptions,
@@ -70,26 +69,17 @@ def _thumb_url(server: "PlexServer", path: str | None) -> str | None:
     """Build an authenticated Plex thumbnail URL, or None if no path."""
     if not path:
         return None
-    return server.build_plex_url(path)
+    return server.build_image_url(path, 480)
 
 
 def _episode_thumb(server: "PlexServer", item) -> str | None:
     """Return the correct thumbnail for an episode, respecting tv_selection config."""
-    selection = getattr(server.device_config, "tv_selection", "tv-poster-series")
-    match selection:
-        case "tv-poster-series":
-            path = getattr(item, "grandparentThumb", None)
-        case "tv-poster-season":
-            path = getattr(item, "parentThumb", None)
-        case "tv-poster-episode":
-            path = getattr(item, "thumb", None)
-        case "tv-poster-art":
-            # artUrl is a full URL already
-            art = getattr(item, "artUrl", None)
-            return art or _thumb_url(server, getattr(item, "grandparentThumb", None))
-        case _:
-            path = getattr(item, "grandparentThumb", None)
-    return _thumb_url(server, path)
+    return _item_thumb(server, item)
+
+
+def _item_thumb(server: "PlexServer", item) -> str | None:
+    """Use the same artwork preferences for browse/search and now playing."""
+    return _thumb_url(server, server.get_artwork_url(item))
 
 
 def _make_item(
@@ -322,7 +312,7 @@ def _browse_on_deck(server, plex, page: int, limit: int) -> BrowseResults:
                     media_class=MediaClass.MOVIE,
                     media_type=MediaContentType.MOVIE,
                     can_play=True,
-                    thumbnail=_thumb_url(server, getattr(item, "thumb", None)),
+                    thumbnail=_item_thumb(server, item),
                     duration=int(item.duration / 1000)
                     if getattr(item, "duration", None)
                     else None,
@@ -488,7 +478,7 @@ def _browse_movies(
             media_class=MediaClass.MOVIE,
             media_type=MediaContentType.MOVIE,
             can_play=True,
-            thumbnail=_thumb_url(server, getattr(m, "thumb", None)),
+            thumbnail=_item_thumb(server, m),
             duration=int(getattr(m, "duration", 0) / 1000)
             if getattr(m, "duration", None)
             else None,
@@ -851,7 +841,7 @@ def _search_sync(
 
     for item in raw:
         media_class, item_media_type, can_play, can_browse = _classify_item(item)
-        thumb = _thumb_url(server, getattr(item, "thumb", None))
+        thumb = _item_thumb(server, item)
         subtitle = _search_subtitle(item, item_media_type)
         results.append(
             _make_item(

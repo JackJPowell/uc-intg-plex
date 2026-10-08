@@ -26,6 +26,22 @@ Supported attributes:
    - Fast Forward and Rewind
    - Next and Previous
 
+## Artwork settings
+
+Setup lets you choose series, season, or episode posters or series background art for TV,
+and posters or background art for movies. These choices apply to now playing, browse
+results, and search results. Missing artwork falls back to the next available image.
+
+The **Show Placeholder Artwork** checkbox controls both missing-artwork placeholders and
+the idle image. It defaults to enabled, including for existing configurations without
+the `show_placeholders` field. Disable it in setup or set `"show_placeholders": false`
+in the device configuration to leave missing artwork blank.
+
+Now playing provides small (60), medium (100), and large (420 pixel) image variants for
+the UI, plus a 480 pixel default image. Plex artwork uses its image transcoder with
+aspect ratio preserved; embedded placeholders are resized locally. Browse thumbnails
+use a 480 pixel bounding box.
+
 ## Usage
 The simpliest way to get started is by uploading this integration to your unfolded circle remote. You'll find the option on the integration tab in the web configurator. Simply upload the .tar.gz file attached to the release. This option is nice and doesn't require a separate docker instance to host the package. However, upgrading is a fully manual process. To help with this, a docker image is also provided that allows you to run it externally from the remote and easily upgrade when new versions are released. 
 
