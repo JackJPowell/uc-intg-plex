@@ -19,7 +19,7 @@ from ucapi import (
     SetupError,
     UserDataResponse,
 )
-from ucapi_framework import BaseSetupFlow, MigrationData, EntityMigrationMapping
+from ucapi_framework import BaseSetupFlow, EntityMigrationMapping, MigrationData
 
 _LOG = logging.getLogger(__name__)
 
@@ -290,7 +290,8 @@ class PlexSetupFlow(BaseSetupFlow[PlexConfig]):
                     "label": {"en": "TV Shows"},
                     "field": {
                         "dropdown": {
-                            "value": dropdown_tv_settings[0]["id"],
+                            "value": device_config.tv_selection
+                            or dropdown_tv_settings[0]["id"],
                             "items": dropdown_tv_settings,
                         }
                     },
@@ -300,8 +301,18 @@ class PlexSetupFlow(BaseSetupFlow[PlexConfig]):
                     "label": {"en": "Movies"},
                     "field": {
                         "dropdown": {
-                            "value": dropdown_movie_settings[0]["id"],
+                            "value": device_config.movie_selection
+                            or dropdown_movie_settings[0]["id"],
                             "items": dropdown_movie_settings,
+                        }
+                    },
+                },
+                {
+                    "id": "show_placeholders",
+                    "label": {"en": "Show Placeholder Artwork"},
+                    "field": {
+                        "checkbox": {
+                            "value": getattr(device_config, "show_placeholders", True)
                         }
                     },
                 },
@@ -394,8 +405,14 @@ class PlexSetupFlow(BaseSetupFlow[PlexConfig]):
             )  # ty:ignore[invalid-return-type]
 
         # User completed artwork + browse settings selection
-        tv_selection = msg.input_values.get("tv_selection", "tv-poster-series")
-        movie_selection = msg.input_values.get("movie_selection", "movie-poster")
+        tv_selection = msg.input_values.get(
+            "tv_selection",
+            self._pending_device_config.tv_selection or "tv-poster-series",
+        )
+        movie_selection = msg.input_values.get(
+            "movie_selection",
+            self._pending_device_config.movie_selection or "movie-poster",
+        )
         page_size = int(msg.input_values.get("page_size", 20))
         sort_order = msg.input_values.get("sort_order", "titleSort:asc")
 
@@ -413,6 +430,10 @@ class PlexSetupFlow(BaseSetupFlow[PlexConfig]):
             movie_selection=movie_selection,
             page_size=page_size,
             sort_order=sort_order,
+            show_placeholders=msg.input_values.get(
+                "show_placeholders",
+                getattr(self._pending_device_config, "show_placeholders", True),
+            ),
         )
 
     async def is_migration_required(self, previous_version: str) -> bool:

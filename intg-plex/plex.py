@@ -5,37 +5,33 @@ This module implements Plex communication of the Remote Two integration driver.
 """
 
 import asyncio
-import base64
-import io
 import logging
 import time
 from asyncio import AbstractEventLoop
-from io import BytesIO
 from typing import Any
 
-import aiohttp
+from const import PlexConfig
 from now_playing import (
+    IMAGE_SIZES,
     artist_album_labels,
     episode_artwork_path,
     media_content_type,
     movie_artwork_path,
     pick_session,
     placeholder_image,
+    resized_placeholder,
 )
 from placeholders import PLACEHOLDER_IDLE
-from const import PlexConfig
-from PIL import Image
 from plexapi.base import MediaContainer
 from plexapi.myplex import MyPlexAccount
 from plexapi.server import PlexClient
 from plexapi.server import PlexServer as PlexApiServer
 from plexwebsocket import SIGNAL_CONNECTION_STATE, STATE_CONNECTED, PlexWebsocket
-
 from ucapi.media_player import Attributes as MediaPlayerAttrs
 from ucapi.media_player import States as MediaStates
 from ucapi_framework import (
-    ExternalClientDevice,
     BaseIntegrationDriver,
+    ExternalClientDevice,
 )
 
 _LOG = logging.getLogger(__name__)
@@ -79,10 +75,10 @@ class PlexServer(ExternalClientDevice):
             None  # Player client for sending commands
         )
         self._session: MediaContainer | None = None
-        self._image_cache = None
-        self._image_cache_url = None
         # sessionKey of the session the remote is showing; see _follows_session()
         self._active_session_key: str | None = None
+        self._session_revision = 0
+        self._session_notification: tuple | None = None
         self._background_tasks: set[asyncio.Task] = set()
         self._listen_task: asyncio.Task | None = None
         self._connect_lock = asyncio.Lock()
@@ -201,7 +197,7 @@ class PlexServer(ExternalClientDevice):
                     self.identifier,
                     time.perf_counter() - t0,
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 _LOG.warning(
                     "[%s] WebSocket connection timed out after %.2fs — watchdog will retry if needed",
                     self.identifier,
@@ -305,11 +301,18 @@ class PlexServer(ExternalClientDevice):
     async def _update_session_state(self):
         """Update session state asynchronously."""
         t0 = time.perf_counter()
-        self._session = await self.event_loop.run_in_executor(
+        revision = self._session_revision
+        session = await self.event_loop.run_in_executor(
             None, self.get_session_by_client_id, self.device_config.identifier
         )
+        if revision != self._session_revision:
+            return
+        self._session = session
         elapsed = time.perf_counter() - t0
         if self._session:
+            self._active_session_key = (
+                str(getattr(self._session, "sessionKey", "")) or None
+            )
             title = getattr(self._session, "title", "unknown")
             _LOG.info(
                 "[%s] Active session found in %.2fs: %s",
@@ -346,8 +349,12 @@ class PlexServer(ExternalClientDevice):
             self._attributes[MediaPlayerAttrs.MEDIA_ARTIST] = artist
             self._attributes[MediaPlayerAttrs.MEDIA_ALBUM] = album
 
-            url = self._get_artwork_url(self._session) or placeholder_image(self._session)
+            url = self.get_artwork_url(self._session)
             self._attributes[MediaPlayerAttrs.MEDIA_IMAGE_URL] = url
+            position = getattr(self._session, "viewOffset", 0)
+            self._attributes[MediaPlayerAttrs.MEDIA_POSITION] = int(
+                position / 1000 if isinstance(position, (int, float)) else 0
+            )
         else:
             _LOG.info("[%s] No active session (%.2fs)", self.identifier, elapsed)
             self._attributes[MediaPlayerAttrs.STATE] = MediaStates.OFF
@@ -358,7 +365,11 @@ class PlexServer(ExternalClientDevice):
         """Show the "Nothing playing on Plex" placeholder and clear the previous item's details."""
         self._attributes.update(
             {
-                MediaPlayerAttrs.MEDIA_IMAGE_URL: PLACEHOLDER_IDLE,
+                MediaPlayerAttrs.MEDIA_IMAGE_URL: (
+                    PLACEHOLDER_IDLE
+                    if getattr(self._device_config, "show_placeholders", True)
+                    else ""
+                ),
                 MediaPlayerAttrs.MEDIA_TITLE: "",
                 MediaPlayerAttrs.MEDIA_ARTIST: "",
                 MediaPlayerAttrs.MEDIA_ALBUM: "",
@@ -367,11 +378,15 @@ class PlexServer(ExternalClientDevice):
                 MediaPlayerAttrs.MEDIA_POSITION: 0,
             }
         )
+        self._session = None
 
-    async def _show_idle_after_delay(self) -> None:
+    async def _show_idle_after_delay(self, revision: int) -> None:
         """Switch to the idle placeholder if nothing has started playing after a short wait."""
         await asyncio.sleep(IDLE_DELAY_SECONDS)
-        if self._attributes.get(MediaPlayerAttrs.STATE) == MediaStates.OFF:
+        if (
+            revision == self._session_revision
+            and self._attributes.get(MediaPlayerAttrs.STATE) == MediaStates.OFF
+        ):
             self._set_idle_media()
             self.push_update()
 
@@ -415,6 +430,10 @@ class PlexServer(ExternalClientDevice):
         return self._attributes.get(MediaPlayerAttrs.STATE, MediaStates.OFF)  # type: ignore[return-value]
 
     def _reset_state(self):
+        self._active_session_key = None
+        self._session = None
+        self._session_revision += 1
+        self._session_notification = None
         # Reset state attributes to defaults
         self._attributes = {
             MediaPlayerAttrs.STATE: MediaStates.UNKNOWN,
@@ -427,8 +446,6 @@ class PlexServer(ExternalClientDevice):
             MediaPlayerAttrs.MEDIA_ARTIST: "",
             MediaPlayerAttrs.MEDIA_ALBUM: "",
         }
-        # Clear image cache to free memory
-        self._image_cache = None
 
     def _plex_ws_updates(self, msgtype, data, error) -> None:
         """Handle WS Messages from PlexWebsocket."""
@@ -449,14 +466,26 @@ class PlexServer(ExternalClientDevice):
                             if (
                                 item["clientIdentifier"]
                                 == self.device_config.identifier
+                                and self._follows_session(item)
                             ):
                                 payload = item
                                 break
 
-                        if payload and not self._follows_session(payload):
-                            payload = None
-
                         if payload:
+                            # Position-only events must not invalidate every HTTP fetch:
+                            # on a slow server that would prevent metadata ever arriving.
+                            notification = (
+                                str(payload.get("sessionKey") or ""),
+                                str(payload.get("ratingKey") or ""),
+                                payload["state"],
+                            )
+                            if (
+                                notification != self._session_notification
+                                or payload["state"] == "stopped"
+                            ):
+                                self._session_revision += 1
+                                self._session_notification = notification
+                            revision = self._session_revision
                             # Update state immediately from websocket data
                             play_state = payload["state"]
                             view_offset = payload.get("viewOffset", 0)
@@ -468,14 +497,13 @@ class PlexServer(ExternalClientDevice):
                             )
 
                             if play_state == "stopped":
-                                self._image_cache = None
                                 self._attributes[MediaPlayerAttrs.STATE] = (
                                     MediaStates.OFF
                                 )
                                 self.push_update()
-                                self._create_task(self._show_idle_after_delay())
+                                self._create_task(self._show_idle_after_delay(revision))
                             elif play_state == "paused":
-                                media_position = payload["viewOffset"] / 1000
+                                media_position = view_offset / 1000
                                 self._attributes[MediaPlayerAttrs.STATE] = (
                                     MediaStates.PAUSED
                                 )
@@ -484,11 +512,11 @@ class PlexServer(ExternalClientDevice):
                                 )
                                 self._create_task(
                                     self._fetch_session_details(
-                                        payload, self.identifier
+                                        payload, self.identifier, revision
                                     )
                                 )
-                            elif play_state == "playing":
-                                media_position = payload["viewOffset"] / 1000
+                            elif play_state in ("playing", "buffering"):
+                                media_position = view_offset / 1000
                                 self._attributes[MediaPlayerAttrs.STATE] = (
                                     MediaStates.PLAYING
                                 )
@@ -497,7 +525,7 @@ class PlexServer(ExternalClientDevice):
                                 )
                                 self._create_task(
                                     self._fetch_session_details(
-                                        payload, self.identifier
+                                        payload, self.identifier, revision
                                     )
                                 )
 
@@ -516,8 +544,13 @@ class PlexServer(ExternalClientDevice):
         """
         key = str(payload.get("sessionKey") or "")
         state = payload.get("state")
-        if not key or key == self._active_session_key or self._active_session_key is None:
-            self._active_session_key = None if state == "stopped" else (key or self._active_session_key)
+        if (
+            not key
+            or key == self._active_session_key
+            or self._active_session_key is None
+        ):
+            # Retain the stopped key so late notifications cannot adopt an old session.
+            self._active_session_key = key or self._active_session_key
             return True
         if state in ("playing", "buffering"):
             self._active_session_key = key
@@ -531,15 +564,23 @@ class PlexServer(ExternalClientDevice):
         )
         return False
 
-    async def _fetch_session_details(self, payload: dict, identifier: str):
+    async def _fetch_session_details(
+        self, payload: dict, identifier: str, revision: int
+    ):
         """Fetch full session details without blocking the event loop."""
         t0 = time.perf_counter()
         _LOG.debug("[%s] Fetching session details...", identifier)
         try:
             # Run blocking Plex HTTP call in a thread pool executor
             session = await self.event_loop.run_in_executor(
-                None, self.get_session_by_client_id, self.device_config.identifier, payload
+                None,
+                self.get_session_by_client_id,
+                self.device_config.identifier,
+                payload,
             )
+
+            if revision != self._session_revision:
+                return
 
             if not session:
                 _LOG.debug(
@@ -579,14 +620,11 @@ class PlexServer(ExternalClientDevice):
             self._attributes[MediaPlayerAttrs.MEDIA_ALBUM] = album
 
             # Get artwork URL
-            url = self._get_artwork_url(session) or placeholder_image(session)
+            url = self.get_artwork_url(session)
             self._attributes[MediaPlayerAttrs.MEDIA_IMAGE_URL] = url
 
             # Notify entities that state changed
             self.push_update()
-
-            # Fetch image asynchronously
-            # self._create_task(self._fetch_and_update_image(url, identifier))
 
         except Exception as ex:  # pylint: disable=broad-exception-caught
             _LOG.error(
@@ -605,10 +643,12 @@ class PlexServer(ExternalClientDevice):
             if session.type == "movie":
                 path = movie_artwork_path(session, self._device_config.movie_selection)
                 return self.build_plex_url(path) if path else ""
-            # Anything else (music, clips) keeps plexapi's poster/art URLs
-            if self._device_config.movie_selection == "movie-art":
-                return session.artUrl
-            return session.posterUrl
+            # Movie preferences do not apply to music. Prefer the track/album cover.
+            for attribute in ("thumb", "parentThumb", "grandparentThumb", "art"):
+                path = getattr(session, attribute, None)
+                if path:
+                    return self.build_plex_url(path)
+            return ""
         except (AttributeError, KeyError) as ex:
             _LOG.debug("Error getting artwork URL, using fallback: %s", ex)
             # Fallback to default artwork
@@ -620,67 +660,22 @@ class PlexServer(ExternalClientDevice):
             except (AttributeError, KeyError):
                 return ""
 
-    async def _fetch_and_update_image(self, url: str, identifier: str):
-        """Fetch image asynchronously and push state update to subscribed entities."""
-        try:
-            image_data = await self.store_image_as_base64(url, 400)
-            if image_data:
-                self._attributes[MediaPlayerAttrs.MEDIA_IMAGE_URL] = image_data
-                self.push_update()
-        except Exception as ex:  # pylint: disable=broad-exception-caught
-            _LOG.error("Failed to fetch and update image: %s", ex)
+    def get_artwork_url(self, item) -> str:
+        """Get configured artwork, optionally falling back to a media placeholder."""
+        url = self._get_artwork_url(item)
+        if not url and getattr(self._device_config, "show_placeholders", True):
+            return placeholder_image(item)
+        return url or ""
 
-    async def store_image_as_base64(self, url, max_size):
-        """Retrieve and store image as base64 data."""
-
-        # Check if we need to fetch a new image (cache miss or different URL)
-        if not self._image_cache or self._image_cache_url != url:
-            try:
-                # Use a transient session for each image fetch to avoid lifecycle issues
-                # This ensures the session is always properly closed
-                timeout = aiohttp.ClientTimeout(total=10)
-                async with aiohttp.ClientSession(timeout=timeout) as session:
-                    async with session.get(url) as response:
-                        if response.status == 200:
-                            f = await response.read()
-                            image = Image.open(BytesIO(f))
-
-                            width, height = image.size
-
-                            if max_size >= max(width, height):
-                                byte_image = io.BytesIO()
-                                image.save(byte_image, format="PNG")
-                                byte_image = byte_image.getvalue()
-                                image_b64 = base64.b64encode(byte_image).decode("utf-8")
-                                self._image_cache = f"data:image/png;base64,{image_b64}"
-                                self._image_cache_url = url
-                                return self._image_cache
-
-                            if width > height:
-                                new_width = max_size
-                                new_height = int(height * (max_size / width))
-                            else:
-                                new_height = max_size
-                                new_width = int(width * (max_size / height))
-
-                            resized_image = image.resize(
-                                (new_width, new_height), Image.Resampling.LANCZOS
-                            )
-
-                            resized_bytes = io.BytesIO()
-                            resized_image.save(resized_bytes, format="PNG")
-                            resized_bytes_value = resized_bytes.getvalue()
-
-                            image_b64 = base64.b64encode(resized_bytes_value).decode(
-                                "utf-8"
-                            )
-                            self._image_cache = f"data:image/png;base64,{image_b64}"
-                            self._image_cache_url = url
-                            return self._image_cache
-            except Exception as ex:  # pylint: disable=broad-exception-caught
-                _LOG.error("Failed to fetch image from %s: %s", url, ex)
-                return ""
-        return self._image_cache if self._image_cache else ""
+    def build_image_url(self, path: str, size: int) -> str:
+        """Use Plex's image transcoder to bound artwork size without cropping."""
+        if path.startswith("data:"):
+            return resized_placeholder(path, size)
+        if self._plex:
+            return self._plex.transcodeImage(
+                path, height=size, width=size, minSize=False, upscale=False
+            )
+        return self.build_plex_url(path)
 
     def build_plex_url(self, path: str) -> str:
         """Build a plex url from config and supplied path."""
@@ -708,7 +703,9 @@ class PlexServer(ExternalClientDevice):
                     self._players.append(player)
         return self._players
 
-    def get_session_by_client_id(self, identifier, payload: dict | None = None) -> MediaContainer | None:
+    def get_session_by_client_id(
+        self, identifier, payload: dict | None = None
+    ) -> MediaContainer | None:
         """
         Get the session playing on this client.
 
@@ -732,7 +729,10 @@ class PlexServer(ExternalClientDevice):
             matches = [
                 session
                 for session in sessions
-                if any(p.machineIdentifier == identifier and p.local is True for p in session.players)
+                if any(
+                    p.machineIdentifier == identifier and p.local is True
+                    for p in session.players
+                )
             ]
             return pick_session(matches, payload)
         except Exception as ex:  # pylint: disable=broad-exception-caught
@@ -861,6 +861,15 @@ class PlexServer(ExternalClientDevice):
         :return: Shallow copy of the current attributes dict.
         """
         attrs = dict(self._attributes)
-        if attrs.get(MediaPlayerAttrs.STATE) == MediaStates.OFF and not attrs.get(MediaPlayerAttrs.MEDIA_IMAGE_URL):
+        if (
+            attrs.get(MediaPlayerAttrs.STATE) == MediaStates.OFF
+            and not attrs.get(MediaPlayerAttrs.MEDIA_IMAGE_URL)
+            and getattr(self._device_config, "show_placeholders", True)
+        ):
             attrs[MediaPlayerAttrs.MEDIA_IMAGE_URL] = PLACEHOLDER_IDLE
+        image = attrs.get(MediaPlayerAttrs.MEDIA_IMAGE_URL) or ""
+        for attribute, size in IMAGE_SIZES.items():
+            attrs[attribute] = self.build_image_url(image, size) if image else ""
+        if image:
+            attrs[MediaPlayerAttrs.MEDIA_IMAGE_URL] = self.build_image_url(image, 480)
         return attrs

@@ -22,6 +22,7 @@ class PlexConfig:
     movie_selection: str
     page_size: int = 20
     sort_order: str = "titleSort:asc"
+    show_placeholders: bool = True
 
 
 PLEX_MEDIA_TYPES = {

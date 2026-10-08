@@ -103,7 +103,7 @@ class PlexRemote(RemoteEntity):
 
         repeat = self.get_int_param("repeat", params, 1)
 
-        for _i in range(0, repeat):
+        for _i in range(repeat):
             await self.handle_command(cmd_id, params)
         return StatusCodes.OK
 

@@ -11,12 +11,12 @@ import browser as plex_browser
 from const import PLEX_FEATURES, PLEX_SIMPLE_COMMANDS, PlexConfig
 from plex import PlexServer
 from ucapi import (
-    StatusCodes,
-    media_player,
     BrowseOptions,
     BrowseResults,
     SearchOptions,
     SearchResults,
+    StatusCodes,
+    media_player,
 )
 from ucapi.media_player import Commands, DeviceClasses, Options
 from ucapi_framework import create_entity_id
