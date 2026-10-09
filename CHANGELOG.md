@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## Unreleased
+## v1.4.0 - 2026-10-08
 
 ### Added
 - Media-specific placeholder artwork for TV, movies, and music when no image is available, plus a "Nothing playing on Plex" image when idle.
