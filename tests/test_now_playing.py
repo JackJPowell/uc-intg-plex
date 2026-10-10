@@ -3,6 +3,7 @@
 import asyncio
 import base64
 import sys
+import time
 import unittest
 from dataclasses import asdict
 from io import BytesIO
@@ -10,11 +11,13 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 from urllib.parse import parse_qs, urlparse
+from xml.etree.ElementTree import fromstring
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "intg-plex"))
 
 import browser
 from const import PlexConfig
+from media_player import PlexMediaPlayer
 from now_playing import (
     IMAGE_SIZES,
     artist_album_labels,
@@ -24,6 +27,7 @@ from now_playing import (
 )
 from PIL import Image
 from plex import PlexServer
+from plexapi.client import PlexClient
 from plexapi.server import PlexServer as PlexApiServer
 from setup import PlexSetupFlow
 from ucapi.media_player import Attributes as Attrs
@@ -210,6 +214,92 @@ class ArtworkTests(unittest.TestCase):
 
 
 class AsyncTests(unittest.IsolatedAsyncioTestCase):
+    async def test_rapid_toggles_poll_fresh_state_and_use_music_type(self):
+        server = device()
+        server.event_loop = asyncio.get_running_loop()
+        client = PlexClient.__new__(PlexClient)
+        # A stale cached timeline must not override the fresh second response.
+        client._timeline_cache = [SimpleNamespace(state="playing", type="video")]
+        client._timeline_cache_timestamp = time.time()
+        client.sendCommand = Mock(
+            side_effect=[
+                fromstring(
+                    '<MediaContainer><Timeline state="stopped" type="video"/>'
+                    '<Timeline state="playing" type="music"/></MediaContainer>'
+                ),
+                fromstring('<MediaContainer><Timeline state="paused" type="music"/></MediaContainer>'),
+            ]
+        )
+        calls = []
+
+        def pause(mtype):
+            calls.append(("pause", mtype))
+            server._attributes[Attrs.STATE] = States.PAUSED
+
+        def play(mtype):
+            calls.append(("play", mtype))
+
+        client.pause, client.play = pause, play
+        server._plex_client = client
+        await server.async_toggle_play_pause()
+        await server.async_toggle_play_pause()
+        self.assertEqual(calls, [("pause", "music"), ("play", "music")])
+        self.assertEqual(client.sendCommand.call_count, 2)
+
+    async def test_buffering_fallback_pauses_on_failed_or_timed_out_poll(self):
+        for error in (ConnectionError("No timeline"), TimeoutError()):
+            with self.subTest(error=type(error).__name__):
+                server = device()
+                server.event_loop = asyncio.get_running_loop()
+                server._attributes[Attrs.STATE] = States.BUFFERING
+                server._session = SimpleNamespace(type="track")
+                calls = []
+
+                def pause(mtype):
+                    calls.append(("pause", mtype))
+
+                def play(mtype):
+                    calls.append(("play", mtype))
+
+                server._plex_client = SimpleNamespace(
+                    sendCommand=Mock(side_effect=error), pause=pause, play=play
+                )
+                await server.async_toggle_play_pause()
+                self.assertEqual(calls, [("pause", "music")])
+
+    async def test_entity_update_clears_timestamp_for_live_idle_and_reset(self):
+        server = device(show_placeholders=False)
+        entity = PlexMediaPlayer.__new__(PlexMediaPlayer)
+        entity._device = server
+        entity._entity_id = "test"
+        entity.attributes = {}
+        registry = Mock()
+        registry.contains.return_value = True
+        registry.get.return_value = entity
+        registry.update_attributes.side_effect = lambda _entity_id, attrs: entity.attributes.update(attrs)
+        entity._api = SimpleNamespace(configured_entities=registry)
+
+        for transition in ("live", "idle", "reset"):
+            with self.subTest(transition=transition):
+                server._attributes.update(
+                    {Attrs.STATE: States.PLAYING, Attrs.MEDIA_DURATION: 100}
+                )
+                server._set_media_position(10)
+                await entity.sync_state()
+                self.assertTrue(entity.attributes[Attrs.MEDIA_POSITION_UPDATED_AT])
+                if transition == "live":
+                    server._attributes[Attrs.MEDIA_DURATION] = 0
+                    server._set_media_position(0)
+                elif transition == "idle":
+                    server._set_idle_media()
+                else:
+                    server._reset_state()
+                await entity.sync_state()
+                self.assertEqual(entity.attributes[Attrs.MEDIA_POSITION_UPDATED_AT], "")
+                self.assertEqual(
+                    registry.update_attributes.call_args.args[1][Attrs.MEDIA_POSITION_UPDATED_AT], ""
+                )
+
     async def test_position_events_do_not_starve_metadata_fetches(self):
         server = device()
         tasks = []

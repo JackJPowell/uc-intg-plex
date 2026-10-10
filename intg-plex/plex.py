@@ -24,6 +24,7 @@ from now_playing import (
 )
 from placeholders import PLACEHOLDER_IDLE
 from plexapi.base import MediaContainer
+from plexapi.client import ClientTimeline
 from plexapi.myplex import MyPlexAccount
 from plexapi.server import PlexClient
 from plexapi.server import PlexServer as PlexApiServer
@@ -377,7 +378,7 @@ class PlexServer(ExternalClientDevice):
 
     def _set_idle_media(self) -> None:
         """Show the "Nothing playing on Plex" placeholder and clear the previous item's details."""
-        self._attributes.pop(MediaPlayerAttrs.MEDIA_POSITION_UPDATED_AT, None)
+        self._attributes[MediaPlayerAttrs.MEDIA_POSITION_UPDATED_AT] = ""
         self._attributes.update(
             {
                 MediaPlayerAttrs.MEDIA_IMAGE_URL: (
@@ -813,6 +814,8 @@ class PlexServer(ExternalClientDevice):
         state = self._attributes.get(MediaPlayerAttrs.STATE)
         if state == MediaStates.PLAYING:
             return "playing"
+        elif state == MediaStates.BUFFERING:
+            return "buffering"
         elif state == MediaStates.PAUSED:
             return "paused"
         elif state == MediaStates.OFF:
@@ -832,10 +835,21 @@ class PlexServer(ExternalClientDevice):
         client = self.client
         if client is None:
             return
+
+        def read_timeline() -> ClientTimeline | None:
+            # client.timeline caches polls for one second, which can repeat the previous
+            # action on a rapid second press. Poll directly for every toggle instead.
+            timelines = client.sendCommand(ClientTimeline.key, wait=0)
+            for data in timelines or []:
+                timeline = ClientTimeline(client, data)
+                if timeline.state != "stopped":
+                    return timeline
+            return None
+
         timeline = None
         try:
             timeline = await asyncio.wait_for(
-                self.event_loop.run_in_executor(None, lambda: client.timeline), timeout=PLAYER_STATE_TIMEOUT
+                self.event_loop.run_in_executor(None, read_timeline), timeout=PLAYER_STATE_TIMEOUT
             )
         except Exception as ex:  # pylint: disable=broad-exception-caught
             _LOG.debug("[%s] Player timeline unavailable, using cached state: %s", self.identifier, ex)
@@ -901,9 +915,11 @@ class PlexServer(ExternalClientDevice):
         """
         attrs = dict(self._attributes)
         # Without a duration (Live TV reports position 0 on every update) a timestamp would make
-        # the remote count up from 0 and snap back with each update, so it's only sent with one.
+        # the remote count up from 0 and snap back with each update, so clear it without one.
         if not attrs.get(MediaPlayerAttrs.MEDIA_DURATION):
-            attrs.pop(MediaPlayerAttrs.MEDIA_POSITION_UPDATED_AT, None)
+            # Updates merge attributes: omission (or None, filtered by the framework)
+            # would leave the previous item's timestamp on the remote.
+            attrs[MediaPlayerAttrs.MEDIA_POSITION_UPDATED_AT] = ""
         if (
             attrs.get(MediaPlayerAttrs.STATE) == MediaStates.OFF
             and not attrs.get(MediaPlayerAttrs.MEDIA_IMAGE_URL)
