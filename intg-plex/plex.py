@@ -65,7 +65,7 @@ class PlexServer(ExternalClientDevice):
             loop,
             enable_watchdog=True,
             watchdog_interval=WEBSOCKET_WATCHDOG_INTERVAL,
-            reconnect_delay=5,
+            reconnect_delay=0.5,
             max_reconnect_attempts=CONNECTION_RETRIES,
             config_manager=config_manager,
             driver=driver,
@@ -203,10 +203,11 @@ class PlexServer(ExternalClientDevice):
                 )
             except TimeoutError:
                 _LOG.warning(
-                    "[%s] WebSocket connection timed out after %.2fs — watchdog will retry if needed",
+                    "[%s] WebSocket connection timed out after %.2fs",
                     self.identifier,
                     time.perf_counter() - t0,
                 )
+                raise ConnectionError("Plex WebSocket connection timed out") from None
 
             # Get initial session state
             t1 = time.perf_counter()

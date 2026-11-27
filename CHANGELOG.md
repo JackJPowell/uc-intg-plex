@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## v1.4.2 - 2026-11-26
+
+### Changed
+- Updated ucapi-framework to 1.9.10 for improved connection recovery and exponential retry backoff.
+- Reduced the initial reconnect delay from 5 seconds to 0.5 seconds.
+
+### Fixed
+- Retry failed initial connections when the network is unavailable at startup or after wake, and cancel pending retries when entering standby.
+- Treat Plex WebSocket connection timeouts as failed connections so the framework can retry.
+
 ## v1.4.1 - 2026-10-10
 
 ### Fixed
