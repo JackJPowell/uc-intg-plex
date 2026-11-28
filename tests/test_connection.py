@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "intg-plex"))
 
 from const import PlexConfig
 from plex import PlexServer
+from plexwebsocket import STATE_CONNECTED
 
 
 class ConnectionTests(unittest.IsolatedAsyncioTestCase):
@@ -22,6 +23,35 @@ class ConnectionTests(unittest.IsolatedAsyncioTestCase):
             movie_selection="movie-poster",
         ))
         self.addAsyncCleanup(self.device.disconnect)
+
+    async def test_framework_connects_at_startup_and_after_standby(self):
+        def websocket(**_kwargs):
+            stopped = asyncio.Event()
+            client = SimpleNamespace(state="stopped", close=stopped.set)
+
+            async def listen():
+                client.state = STATE_CONNECTED
+                await stopped.wait()
+                client.state = "stopped"
+
+            client.listen = listen
+            return client
+
+        with (
+            patch.object(self.device, "_get_plex_server", return_value=Mock()) as server,
+            patch("plex.PlexWebsocket", side_effect=websocket) as factory,
+            patch.object(self.device, "_update_session_state", new_callable=AsyncMock) as refresh,
+        ):
+            self.assertTrue(await asyncio.wait_for(self.device.connect(), 1))
+            self.assertTrue(self.device.is_connected)
+            await self.device.disconnect()
+            self.assertFalse(self.device.is_connected)
+            self.assertTrue(await asyncio.wait_for(self.device.connect(), 1))
+            self.assertTrue(self.device.is_connected)
+            self.assertEqual(server.call_count, 2)
+            self.assertEqual(factory.call_count, 2)
+            self.assertEqual(refresh.await_count, 2)
+            await self.device.disconnect()
 
     async def test_framework_recovers_after_initial_network_failure(self):
         recovered = asyncio.Event()

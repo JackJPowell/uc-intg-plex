@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## v1.4.4 - 2026-11-28
+
+### Changed
+- Updated ucapi-framework to 1.9.11.
+
+### Fixed
+- Fixed startup and reconnect after standby hanging due to a connection lock collision in ucapi-framework 1.9.10. The framework update resolves the issue without changes to Plex connection handling.
+
 ## v1.4.3 - 2026-11-27
 
 ### Changed
